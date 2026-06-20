@@ -19,8 +19,10 @@ near-duplicates — "the agent has no memory of the module you refactored." `dej
 
 🚧 Early days — see [`PLAN.md`](./PLAN.md) for the roadmap. v0.1 targets Python.
 
-**M1 shipped:** the CLI installs and runs (`deja --version`, `deja hello`). The
-real commands (`index`, `find`) are next.
+**M1 shipped:** the CLI installs and runs (`deja --version`, `deja hello`).
+**M2 shipped:** `deja index` walks the repo, parses every Python function/method
+with a stdlib `ast` parser (honoring `.gitignore`), and writes a JSON index to
+`.dejafunc/index.json`. `deja find` is next.
 
 ## Install (from source)
 
@@ -30,12 +32,25 @@ deja --version                # deja-func 0.1.0
 deja hello                    # 🫠 say hi
 ```
 
+## Usage
+
+```bash
+deja index                    # walk this repo, write .dejafunc/index.json
+deja index path/to/project    # index a specific directory
+# → 🧠 Indexed 412 functions → .dejafunc/index.json
+```
+
+`deja index` recursively scans for supported source files (Python today),
+extracts each function/method's name, signature, docstring, and `file:line`, and
+saves them to a small, diffable JSON index. It respects your `.gitignore` and
+skips noise dirs (`.venv`, `node_modules`, `__pycache__`, …).
+
 ## Quickstart (planned)
 
 ```bash
 pipx install deja-func        # or: uv tool install deja-func
 deja index                    # build .dejafunc/index.json from this repo
-deja find "validate email"    # → existing functions that already do it
+deja find "validate email"    # → existing functions that already do it (M3)
 ```
 
 ## Develop
