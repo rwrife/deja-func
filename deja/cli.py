@@ -1,14 +1,15 @@
 """Command-line entry point for deja-func.
 
-For M1 this is intentionally tiny: a CLI that installs cleanly and proves the
-plumbing works (`deja --version`, `deja hello`). The real commands (`index`,
-`find`, ...) arrive in later milestones — see PLAN.md §7.
+M1 shipped the plumbing (`deja --version`, `deja hello`). M2 adds the first real
+command, `deja index`, which walks the repo and writes `.dejafunc/index.json`.
+The remaining commands (`find`, ...) arrive in later milestones — see PLAN.md §7.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from . import __version__
 
@@ -39,12 +40,40 @@ def build_parser() -> argparse.ArgumentParser:
     hello = subparsers.add_parser("hello", help="Print a friendly hello and confirm install.")
     hello.set_defaults(func=cmd_hello)
 
+    index = subparsers.add_parser(
+        "index",
+        help="Walk the repo and build the function index (.dejafunc/index.json).",
+    )
+    index.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Directory to index (default: current directory).",
+    )
+    index.set_defaults(func=cmd_index)
+
     return parser
 
 
 def cmd_hello(_args: argparse.Namespace) -> int:
     """Handle `deja hello`."""
     print(HELLO_MESSAGE)
+    return 0
+
+
+def cmd_index(args: argparse.Namespace) -> int:
+    """Handle `deja index`: build the index and write it to disk."""
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .index import build_index, save_index
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    index = build_index(root)
+    out = save_index(index, root)
+    print(f"\U0001f9e0 Indexed {len(index)} functions \u2192 {out}")
     return 0
 
 
