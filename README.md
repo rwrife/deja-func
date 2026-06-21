@@ -19,12 +19,32 @@ near-duplicates — "the agent has no memory of the module you refactored." `dej
 
 🚧 Early days — see [`PLAN.md`](./PLAN.md) for the roadmap. v0.1 targets Python.
 
+**M1 shipped:** the CLI installs and runs (`deja --version`, `deja hello`). The
+real commands (`index`, `find`) are next.
+
+## Install (from source)
+
+```bash
+pipx install .                # or: uv tool install .
+deja --version                # deja-func 0.1.0
+deja hello                    # 🫠 say hi
+```
+
 ## Quickstart (planned)
 
 ```bash
 pipx install deja-func        # or: uv tool install deja-func
 deja index                    # build .dejafunc/index.json from this repo
 deja find "validate email"    # → existing functions that already do it
+```
+
+## Develop
+
+```bash
+uv venv && source .venv/bin/activate
+uv pip install -e ".[dev]"
+ruff check . && ruff format --check .
+pytest -q
 ```
 
 ## Roadmap (short)
