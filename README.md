@@ -25,6 +25,9 @@ with a stdlib `ast` parser (honoring `.gitignore`), and writes a JSON index to
 `.dejafunc/index.json`.
 **M3 shipped:** `deja find <query>` fuzzy-searches that index by name + docstring
 and prints ranked matches with `file:line`.
+**M4 shipped:** `deja find` now also searches by **signature shape**
+(`--sig "(str)->bool"`), weights docstrings for natural-language **intent**
+queries (`--intent`), and can **explain** why each result matched (`--explain`).
 
 ## Install (from source)
 
@@ -62,6 +65,39 @@ queries like `"parse an ISO date"`). It auto-builds the index on first run if on
 doesn't exist yet, and exits `0` when matches are found / non-zero when none are —
 so it's easy to script.
 
+### Search by signature shape, intent, or both (M4)
+
+Don't know the name? Search by **shape** — argument types and return type:
+
+```bash
+deja find --sig "(str)->bool"          # functions taking a str, returning a bool
+deja find --sig "(int, int)"           # any two-int function (return type ignored)
+deja find --sig "(str)->bool" ./proj   # ...in a specific project
+# → 🫠 You already wrote this:
+#     is_valid — validate.py:7 — (s: str) -> bool
+```
+
+Shapes are matched coarsely (arg count + normalized type tokens + return type),
+so `(str)` matches `(text: str)`, `list[int]` collapses to `list`, `*args`
+becomes a wildcard, and `self`/`cls` are ignored. It's "roughly this shape?", not
+type-checking.
+
+Weight the **docstring** higher for plain-English intent queries:
+
+```bash
+deja find "turn a title into a url slug" --intent
+```
+
+**Blend** text and shape, and ask *why* each result matched:
+
+```bash
+deja find "validate" --sig "(str)->bool" --explain
+# → 🫠 You already wrote this:
+#     validate_email — util.py:1 — (addr: str) -> bool
+#         Validate an email address and return True if it looks valid.
+#         score 100  (name 100 · sig 100 · doc 88)
+```
+
 ## Develop
 
 ```bash
@@ -76,7 +112,7 @@ pytest -q
 - **M1** scaffold + hello-world
 - **M2** Python parser + `deja index`
 - **M3** `deja find` fuzzy search ✅
-- **M4** signature-shape & intent search
+- **M4** signature-shape & intent search ✅
 - **M5** JS/TS support
 - **M6** MCP server + JSON output for agents
 
