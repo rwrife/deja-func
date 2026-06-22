@@ -23,8 +23,11 @@ classifiers = [
     "Topic :: Software Development",
 ]
 
-# Core stays dependency-light. rapidfuzz/pathspec land in later milestones (M2/M3).
-dependencies = []
+# Core stays dependency-light. pathspec lands in M2 (.gitignore-aware walk);
+# rapidfuzz arrives in M3 (fuzzy search).
+dependencies = [
+    "pathspec>=0.12",
+]
 
 [project.optional-dependencies]
 dev = [

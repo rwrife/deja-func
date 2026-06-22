@@ -15,6 +15,7 @@ env/
 .ruff_cache/
 .coverage
 htmlcov/
+uv.lock
 
 # deja-func's own index
 .dejafunc/
