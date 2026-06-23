@@ -23,10 +23,11 @@ classifiers = [
     "Topic :: Software Development",
 ]
 
-# Core stays dependency-light. pathspec lands in M2 (.gitignore-aware walk);
-# rapidfuzz arrives in M3 (fuzzy search).
+# Core stays dependency-light: pathspec for .gitignore-aware walking (M2) and
+# rapidfuzz for fuzzy search (M3). Both are tiny and C-backed.
 dependencies = [
     "pathspec>=0.12",
+    "rapidfuzz>=3.0",
 ]
 
 [project.optional-dependencies]

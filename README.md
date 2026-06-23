@@ -22,7 +22,9 @@ near-duplicates — "the agent has no memory of the module you refactored." `dej
 **M1 shipped:** the CLI installs and runs (`deja --version`, `deja hello`).
 **M2 shipped:** `deja index` walks the repo, parses every Python function/method
 with a stdlib `ast` parser (honoring `.gitignore`), and writes a JSON index to
-`.dejafunc/index.json`. `deja find` is next.
+`.dejafunc/index.json`.
+**M3 shipped:** `deja find <query>` fuzzy-searches that index by name + docstring
+and prints ranked matches with `file:line`.
 
 ## Install (from source)
 
@@ -45,13 +47,20 @@ extracts each function/method's name, signature, docstring, and `file:line`, and
 saves them to a small, diffable JSON index. It respects your `.gitignore` and
 skips noise dirs (`.venv`, `node_modules`, `__pycache__`, …).
 
-## Quickstart (planned)
-
 ```bash
-pipx install deja-func        # or: uv tool install deja-func
-deja index                    # build .dejafunc/index.json from this repo
-deja find "validate email"    # → existing functions that already do it (M3)
+deja find "validate email"    # fuzzy-search the index by name + docstring
+deja find slugify -n 5        # cap results (default: 10)
+deja find "parse iso date" path/to/project
+# → 🫠 You already wrote this:
+#     parse_iso_date — dates.py:42 — (s: str) -> datetime
+#         Parse an ISO-8601 timestamp into a datetime.
 ```
+
+`deja find` ranks functions with `rapidfuzz` over both the **name/qualname**
+(catches "I'm about to write `slugify`") and the **docstring** (catches intent
+queries like `"parse an ISO date"`). It auto-builds the index on first run if one
+doesn't exist yet, and exits `0` when matches are found / non-zero when none are —
+so it's easy to script.
 
 ## Develop
 
@@ -66,7 +75,7 @@ pytest -q
 
 - **M1** scaffold + hello-world
 - **M2** Python parser + `deja index`
-- **M3** `deja find` fuzzy search
+- **M3** `deja find` fuzzy search ✅
 - **M4** signature-shape & intent search
 - **M5** JS/TS support
 - **M6** MCP server + JSON output for agents
