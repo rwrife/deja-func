@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -285,3 +286,40 @@ def test_cli_find_intent_flag(tmp_path: Path, capsys: pytest.CaptureFixture) -> 
     captured = capsys.readouterr()
     assert rc == 0
     assert "slugify" in captured.out
+
+
+# -- M6: --json output -----------------------------------------------------
+
+
+def test_cli_find_json_emits_stable_document(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    _sample_repo(tmp_path)
+    rc = main(["find", "slugify", str(tmp_path), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    doc = json.loads(captured.out)
+    assert doc["schema_version"] == 1
+    assert doc["query"] == "slugify"
+    assert doc["count"] >= 1
+    assert doc["results"][0]["name"] == "slugify"
+    assert doc["results"][0]["file"].endswith("strings.py")
+
+
+def test_cli_find_json_no_match_is_empty_and_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    _sample_repo(tmp_path)
+    rc = main(["find", "zzzqqq_no_such_function", str(tmp_path), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    doc = json.loads(captured.out)
+    assert doc["count"] == 0
+    assert doc["results"] == []
+
+
+def test_cli_find_json_echoes_sig(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    _sample_repo(tmp_path)
+    rc = main(["find", "--sig", "(str)->str", str(tmp_path), "--json"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    doc = json.loads(captured.out)
+    assert doc["sig"] == "(str)->str"
