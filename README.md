@@ -17,7 +17,8 @@ near-duplicates — "the agent has no memory of the module you refactored." `dej
 
 ## Status
 
-🚧 Early days — see [`PLAN.md`](./PLAN.md) for the roadmap. v0.1 targets Python.
+🚧 Early days — see [`PLAN.md`](./PLAN.md) for the roadmap. v0.1 targets Python,
+with JavaScript/TypeScript now indexed too.
 
 **M1 shipped:** the CLI installs and runs (`deja --version`, `deja hello`).
 **M2 shipped:** `deja index` walks the repo, parses every Python function/method
@@ -28,6 +29,9 @@ and prints ranked matches with `file:line`.
 **M4 shipped:** `deja find` now also searches by **signature shape**
 (`--sig "(str)->bool"`), weights docstrings for natural-language **intent**
 queries (`--intent`), and can **explain** why each result matched (`--explain`).
+**M5 shipped:** indexing is now **multi-language** — a tree-light, dependency-free
+parser picks up **JavaScript/TypeScript** (`.js`, `.jsx`, `.ts`, `.tsx`)
+functions, arrow consts, and class/object methods alongside Python.
 
 ## Install (from source)
 
@@ -45,10 +49,26 @@ deja index path/to/project    # index a specific directory
 # → 🧠 Indexed 412 functions → .dejafunc/index.json
 ```
 
-`deja index` recursively scans for supported source files (Python today),
-extracts each function/method's name, signature, docstring, and `file:line`, and
-saves them to a small, diffable JSON index. It respects your `.gitignore` and
-skips noise dirs (`.venv`, `node_modules`, `__pycache__`, …).
+`deja index` recursively scans for supported source files (Python and
+JavaScript/TypeScript today), extracts each function/method's name, signature,
+docstring, and `file:line`, and saves them to a small, diffable JSON index. It
+respects your `.gitignore` and skips noise dirs (`.venv`, `node_modules`,
+`__pycache__`, …).
+
+### Multi-language: JavaScript & TypeScript (M5)
+
+Indexing isn't Python-only. `.js`, `.jsx`, `.ts`, and `.tsx` files are parsed by
+a small, **dependency-free** scanner (no Babel/tree-sitter) that recognizes:
+
+- `function foo(...)`, `async function`, and generators (`function* gen`)
+- arrow functions bound to a name: `const add = (a, b) => ...` (incl. `x => x`)
+- class & object methods, plus `get`/`set` accessors
+
+TypeScript parameter annotations and return types are preserved in the
+signature, e.g. `(email: string): boolean`. Adding a language is one parser
+module + one registry entry, so more are easy to slot in later. The scan is
+best-effort: anything it can't make sense of in a file is skipped rather than
+raising, so one odd file can never abort the whole index.
 
 ```bash
 deja find "validate email"    # fuzzy-search the index by name + docstring
@@ -113,7 +133,7 @@ pytest -q
 - **M2** Python parser + `deja index`
 - **M3** `deja find` fuzzy search ✅
 - **M4** signature-shape & intent search ✅
-- **M5** JS/TS support
+- **M5** JS/TS support ✅
 - **M6** MCP server + JSON output for agents
 
 Full plan, backlog, and what's explicitly out of scope: [`PLAN.md`](./PLAN.md).
