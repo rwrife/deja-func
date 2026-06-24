@@ -37,8 +37,11 @@ def _style(text: str, code: str, *, color: bool) -> str:
 
 def _header(query: str, n: int, *, color: bool) -> str:
     """A personality-laden header line summarizing the result count."""
+    # Pure shape searches arrive with an empty textual query; describe the
+    # "nothing found" case without printing an empty ``''``.
+    label = repr(query) if query.strip() else "that shape"
     if n == 0:
-        return f"🤔 Nothing like {query!r} yet — looks new. Go write it."
+        return f"🤔 Nothing like {label} yet — looks new. Go write it."
     if n == 1:
         lead = "🫠 You already wrote this:"
     else:
@@ -46,11 +49,20 @@ def _header(query: str, n: int, *, color: bool) -> str:
     return _style(lead, _BOLD, color=color)
 
 
+def _explain_line(s: ScoredRecord) -> str:
+    """A ``--explain`` breakdown like ``score 88.0  (name 88.0 · sig 75.0)``."""
+    parts = s.breakdown.parts()
+    detail = " · ".join(f"{label} {val:.0f}" for label, val in parts)
+    base = f"score {s.score:.0f}"
+    return f"{base}  ({detail})" if detail else base
+
+
 def format_results(
     query: str,
     results: Iterable[ScoredRecord],
     *,
     color: bool | None = None,
+    explain: bool = False,
     stream=None,
 ) -> str:
     """Render *results* into a printable block of text.
@@ -59,6 +71,8 @@ def format_results(
         query: The original search query (used in the header).
         results: Ranked matches from :func:`deja.search.search`.
         color: Force ANSI on/off; ``None`` auto-detects from *stream*.
+        explain: When true, append a per-signal score breakdown under each match
+            (the ``--explain`` flag, M4).
         stream: Stream used for TTY detection when *color* is ``None``
             (defaults to ``sys.stdout``).
 
@@ -78,4 +92,6 @@ def format_results(
         lines.append(f"  {name} — {loc} — {sig}")
         if r.docstring:
             lines.append(_style(f"      {r.docstring}", _DIM, color=color))
+        if explain:
+            lines.append(_style(f"      {_explain_line(s)}", _DIM, color=color))
     return "\n".join(lines)
