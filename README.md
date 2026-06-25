@@ -36,6 +36,9 @@ functions, arrow consts, and class/object methods alongside Python.
 zero-dependency **stdio MCP server** exposing a `find_function` tool, so AI
 agents can query the inventory *before* writing code. See
 [Use with AI agents](#use-with-ai-agents).
+**`deja dupes` shipped:** the **redundancy report** — cluster near-identical
+functions across the repo so you can finally see "you have 6 date parsers". See
+[Find redundant functions](#find-redundant-functions-deja-dupes).
 
 ## Install (from source)
 
@@ -121,6 +124,44 @@ deja find "validate" --sig "(str)->bool" --explain
 #         Validate an email address and return True if it looks valid.
 #         score 100  (name 100 · sig 100 · doc 88)
 ```
+
+### Find redundant functions (`deja dupes`)
+
+`deja find` answers "have I written *this* before?" for a query you type.
+`deja dupes` flips it around and asks the question of the repo against *itself*:
+**which functions are near-duplicates of each other?** It's the redundancy
+report — the "you have 6 date parsers" view.
+
+```bash
+deja dupes                    # scan this repo for near-duplicate clusters
+deja dupes path/to/project    # ...in a specific directory
+# → ♻️ Found 1 cluster of near-duplicate functions:
+#     ×3 · ~95% similar
+#       parse_iso_date — dates.py:1 — (s: str)
+#           Parse an ISO 8601 date string into a date.
+#       parse_date_iso — dates.py:5 — (text: str)
+#           Parse an ISO 8601 date string into a date object.
+#       parse_iso — dates.py:9 — (value: str)
+#           Parse an ISO date string.
+```
+
+Each pair of functions is scored by blending the same signals `find` trusts —
+fuzzy **name**, fuzzy **docstring**, and **signature shape** — then functions are
+grouped by **complete-linkage**: a function joins a cluster only if it's similar
+to *every* member, so each cluster stays internally coherent (no "bridge"
+functions chaining unrelated code into one blob). Clusters are printed
+**largest first**; lone functions with no twin are omitted. Tune sensitivity with
+`--threshold` (0–100, default `75`; lower = looser, bigger clusters), cap output
+with `-n/--limit`, and add `--json` for tooling:
+
+```bash
+deja dupes --threshold 85     # only flag very close twins
+deja dupes -n 5               # show the 5 biggest clusters
+deja dupes --json | jq '.clusters[0].members[].file'
+```
+
+It auto-builds the index on first run, and exits `0` when any redundancy is
+found / `1` when the inventory is clean — handy as a soft CI signal.
 
 ## Use with AI agents
 

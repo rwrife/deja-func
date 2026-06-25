@@ -6,6 +6,8 @@ lookup: fuzzy-search the index by name + docstring. M4 extends `find` with
 signature-shape search (`--sig`), intent weighting (`--intent`), and `--explain`.
 M6 adds machine-readable output (`deja find --json`) and `deja mcp`, a stdio
 MCP server so AI agents query the inventory before writing code (see PLAN.md §6).
+`deja dupes` (PLAN.md §8 #1) reports clusters of near-identical functions — the
+redundancy report ("you have 6 date parsers").
 Later commands (`stats`, `watch`, ...) arrive in subsequent milestones — see PLAN.md §7.
 """
 
@@ -117,6 +119,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp.set_defaults(func=cmd_mcp)
 
+    dupes = subparsers.add_parser(
+        "dupes",
+        help="Report clusters of near-duplicate functions (the redundancy report).",
+    )
+    dupes.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repo root to scan (default: current directory).",
+    )
+    dupes.add_argument(
+        "-t",
+        "--threshold",
+        type=float,
+        default=None,
+        metavar="N",
+        help="Similarity cutoff 0-100 to link two functions (default: 75). "
+        "Lower = more (looser) clusters.",
+    )
+    dupes.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of clusters to show (default: all).",
+    )
+    dupes.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit structured JSON (stable schema) instead of pretty text.",
+    )
+    dupes.set_defaults(func=cmd_dupes)
+
     return parser
 
 
@@ -221,6 +257,55 @@ def cmd_mcp(args: argparse.Namespace) -> int:
         print(f"deja: not a directory: {root}", file=sys.stderr)
         return 2
     return serve(root)
+
+
+def cmd_dupes(args: argparse.Namespace) -> int:
+    """Handle `deja dupes`: cluster near-duplicate functions (PLAN.md §8 #1).
+
+    Loads the index for the target repo (auto-building it first if none exists,
+    like ``deja find``), clusters near-identical functions, and prints them
+    largest-cluster-first. Exit code is 0 when any redundancy is found and 1 when
+    the inventory is clean, so it's scriptable / CI-friendly.
+    """
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .dupes import DEFAULT_THRESHOLD, find_clusters
+    from .index import build_index, load_index, save_index
+    from .render import format_clusters
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    threshold = args.threshold if args.threshold is not None else DEFAULT_THRESHOLD
+    if not 0.0 <= threshold <= 100.0:
+        print("deja: --threshold must be between 0 and 100", file=sys.stderr)
+        return 2
+
+    try:
+        index = load_index(root)
+    except FileNotFoundError:
+        # No index yet: build one on the fly so first-run is friction-free.
+        print("\U0001f50e No index yet — building one first…", file=sys.stderr)
+        index = build_index(root)
+        save_index(index, root)
+
+    clusters = find_clusters(index.records, threshold=threshold)
+    if args.limit is not None:
+        clusters = clusters[: max(0, args.limit)]
+
+    if getattr(args, "as_json", False):
+        # Machine-readable path: stable schema, no ANSI, no personality.
+        import json as _json
+
+        from .serialize import clusters_to_dict
+
+        doc = clusters_to_dict(clusters, threshold=threshold)
+        print(_json.dumps(doc, indent=2, ensure_ascii=False))
+        return 0 if clusters else 1
+
+    print(format_clusters(clusters))
+    return 0 if clusters else 1
 
 
 def main(argv: list[str] | None = None) -> int:
