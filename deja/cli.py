@@ -4,7 +4,9 @@ M1 shipped the plumbing (`deja --version`, `deja hello`). M2 added `deja index`
 (walk the repo, write `.dejafunc/index.json`). M3 added `deja find`, the core
 lookup: fuzzy-search the index by name + docstring. M4 extends `find` with
 signature-shape search (`--sig`), intent weighting (`--intent`), and `--explain`.
-Later commands (`stats`, `mcp`, ...) arrive in subsequent milestones — see PLAN.md §7.
+M6 adds machine-readable output (`deja find --json`) and `deja mcp`, a stdio
+MCP server so AI agents query the inventory before writing code (see PLAN.md §6).
+Later commands (`stats`, `watch`, ...) arrive in subsequent milestones — see PLAN.md §7.
 """
 
 from __future__ import annotations
@@ -95,7 +97,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show why each result matched (per-signal score breakdown).",
     )
+    find.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit structured JSON (stable schema) instead of pretty text.",
+    )
     find.set_defaults(func=cmd_find)
+
+    mcp = subparsers.add_parser(
+        "mcp",
+        help="Run a stdio MCP server exposing find_function for AI agents.",
+    )
+    mcp.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repo root to serve (default: current directory).",
+    )
+    mcp.set_defaults(func=cmd_mcp)
 
     return parser
 
@@ -174,10 +194,33 @@ def cmd_find(args: argparse.Namespace) -> int:
         sig=sig,
         intent=args.intent,
     )
+
+    if getattr(args, "as_json", False):
+        # Machine-readable path (M6): stable schema, no ANSI, no personality.
+        import json as _json
+
+        from .serialize import results_to_dict
+
+        doc = results_to_dict(results, query=query, sig=sig, intent=args.intent)
+        print(_json.dumps(doc, indent=2, ensure_ascii=False))
+        return 0 if results else 1
+
     # Header still reads naturally when only a shape was given.
     header_query = query if query.strip() else (sig or "")
     print(format_results(header_query, results, explain=args.explain))
     return 0 if results else 1
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Handle `deja mcp`: run the stdio MCP server until EOF (M6)."""
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .mcp import serve
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+    return serve(root)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -32,6 +32,10 @@ queries (`--intent`), and can **explain** why each result matched (`--explain`).
 **M5 shipped:** indexing is now **multi-language** — a tree-light, dependency-free
 parser picks up **JavaScript/TypeScript** (`.js`, `.jsx`, `.ts`, `.tsx`)
 functions, arrow consts, and class/object methods alongside Python.
+**M6 shipped:** machine-readable output (`deja find --json`) and `deja mcp`, a
+zero-dependency **stdio MCP server** exposing a `find_function` tool, so AI
+agents can query the inventory *before* writing code. See
+[Use with AI agents](#use-with-ai-agents).
 
 ## Install (from source)
 
@@ -118,6 +122,111 @@ deja find "validate" --sig "(str)->bool" --explain
 #         score 100  (name 100 · sig 100 · doc 88)
 ```
 
+## Use with AI agents
+
+The whole point of `deja-func` is to stop redundant code *before it's written* —
+so it speaks two machine-friendly dialects: structured **JSON** for scripts, and
+**MCP** for coding agents.
+
+### `deja find --json` (stable schema)
+
+Add `--json` to any `find` and you get a stable, documented document instead of
+the pretty output — no ANSI, no emoji, easy to pipe into `jq`:
+
+```bash
+deja find slugify --json | jq '.results[0]'
+```
+
+```json
+{
+  "schema_version": 1,
+  "query": "slugify",
+  "sig": null,
+  "intent": false,
+  "count": 1,
+  "results": [
+    {
+      "name": "slugify",
+      "qualname": "text.slugify",
+      "file": "src/text.py",
+      "line": 42,
+      "signature": "(value: str) -> str",
+      "docstring": "Turn a string into a URL-safe slug.",
+      "lang": "python",
+      "score": 88.0,
+      "breakdown": { "name": 88.0, "doc": 60.0, "sig": null }
+    }
+  ]
+}
+```
+
+Exit code is still `0` when there's at least one match and non-zero when there
+are none, so `--json` stays scriptable.
+
+### `deja mcp` (Model Context Protocol server)
+
+`deja mcp` runs a **stdio MCP server** so an agent can look up existing functions
+mid-task. It's dependency-free (plain JSON-RPC 2.0 over stdio — no heavy SDK) and
+exposes two tools:
+
+- **`find_function`** — search by `query` (name/intent), `sig` (shape like
+  `(str)->bool`), and/or `intent`. Returns a human summary *and* the same JSON
+  document as `--json`.
+- **`index_stats`** — totals + per-language counts, to confirm the index exists.
+
+It indexes the target repo on first use, so there's nothing to pre-build:
+
+```bash
+deja mcp                      # serve the current directory over stdio
+deja mcp path/to/project      # serve a specific repo
+```
+
+#### Register with a coding agent
+
+Most MCP clients take a server command + args. Point them at `deja mcp` with the
+repo you want indexed (use an absolute path, or `.` if the client launches in the
+project root).
+
+**Claude Code:**
+
+```bash
+claude mcp add deja-func -- deja mcp /abs/path/to/your/repo
+```
+
+**Cursor / generic `mcp.json`** (e.g. `.cursor/mcp.json` or your client's config):
+
+```json
+{
+  "mcpServers": {
+    "deja-func": {
+      "command": "deja",
+      "args": ["mcp", "/abs/path/to/your/repo"]
+    }
+  }
+}
+```
+
+**OpenClaw** (`~/.openclaw` MCP config, same shape):
+
+```json
+{
+  "mcpServers": {
+    "deja-func": {
+      "command": "deja",
+      "args": ["mcp", "."]
+    }
+  }
+}
+```
+
+Then tell the agent, in its system/instructions, to **call `find_function`
+before writing a new utility** — e.g. *"Before adding a helper, query the
+`deja-func` MCP `find_function` tool to check it doesn't already exist."*
+
+> Transport note: framing is newline-delimited JSON-RPC over stdio (one message
+> per line), the simplest MCP stdio framing. If your client requires
+> `Content-Length` headers, open an issue — it's a small addition.
+
 ## Develop
 
 ```bash
@@ -134,7 +243,7 @@ pytest -q
 - **M3** `deja find` fuzzy search ✅
 - **M4** signature-shape & intent search ✅
 - **M5** JS/TS support ✅
-- **M6** MCP server + JSON output for agents
+- **M6** MCP server + JSON output for agents ✅
 
 Full plan, backlog, and what's explicitly out of scope: [`PLAN.md`](./PLAN.md).
 
