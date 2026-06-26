@@ -18,6 +18,7 @@ import sys
 from collections.abc import Iterable
 
 from .dupes import Cluster
+from .hook import Match
 from .search import ScoredRecord
 
 # Minimal ANSI; only used on a TTY (see _style).
@@ -149,4 +150,69 @@ def format_clusters(
             lines.append(f"    {name} — {loc} — {sig}")
             if r.docstring:
                 lines.append(_style(f"        {r.docstring}", _DIM, color=color))
+    return "\n".join(lines)
+
+
+def _matches_header(n: int, *, strict: bool, color: bool) -> str:
+    """A personality-laden header summarizing the redundancy-hook verdict."""
+    if n == 0:
+        return "\u2728 No staged function looks like existing code — carry on."
+    noun = "function" if n == 1 else "functions"
+    verb = "blocking" if strict else "heads-up"
+    lead = f"\U0001fae0 {n} staged {noun} already exist(s) ({verb}):"
+    return _style(lead, _BOLD, color=color)
+
+
+def format_matches(
+    matches: Iterable[Match],
+    *,
+    strict: bool = False,
+    color: bool | None = None,
+    stream=None,
+) -> str:
+    """Render redundancy-hook *matches* into a printable block of text.
+
+    Output per match::
+
+        new_func — path/new.py:12 — (s: str)
+            ~88% similar to existing:
+            old_func — path/old.py:40 — (text: str)
+                Existing function's summary.
+
+    Args:
+        matches: Matches from :func:`deja.hook.check_staged` (strongest first).
+        strict: Whether the hook is running in blocking mode (affects wording
+            and the closing hint only; exit-code policy lives in the CLI).
+        color: Force ANSI on/off; ``None`` auto-detects from *stream*.
+        stream: Stream used for TTY detection when *color* is ``None``
+            (defaults to ``sys.stdout``).
+
+    Returns:
+        A newline-joined string ready to ``print``.
+    """
+    matches = list(matches)
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+
+    lines = [_matches_header(len(matches), strict=strict, color=color)]
+    for m in matches:
+        s = m.staged
+        e = m.existing
+        s_loc = _style(f"{s.file}:{s.line}", _CYAN, color=color)
+        s_name = _style(s.qualname or s.name, _BOLD, color=color)
+        lines.append(f"  {s_name} — {s_loc} — {s.signature or '()'}")
+        lines.append(_style(f"      ~{m.score:.0f}% similar to existing:", _DIM, color=color))
+        e_loc = _style(f"{e.file}:{e.line}", _CYAN, color=color)
+        e_name = _style(e.qualname or e.name, _BOLD, color=color)
+        lines.append(f"      {e_name} — {e_loc} — {e.signature or '()'}")
+        if e.docstring:
+            lines.append(_style(f"          {e.docstring}", _DIM, color=color))
+    if matches and not strict:
+        lines.append(
+            _style(
+                "  (warning only — commit proceeds; run with --strict to block)",
+                _DIM,
+                color=color,
+            )
+        )
     return "\n".join(lines)
