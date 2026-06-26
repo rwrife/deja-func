@@ -34,6 +34,25 @@ Each ``<match>`` is::
       }
     }
 
+``deja dupes --json`` (PLAN.md §8 #1) emits a sibling document defined here too::
+
+    {
+      "schema_version": 1,
+      "threshold": 75.0,         # similarity cutoff used
+      "count": 2,                # number of clusters returned
+      "clusters": [
+        {
+          "size": 3,            # members in this cluster
+          "score": 88.0,        # representative (avg pairwise) tightness
+          "members": [ <record>, ... ]  # by file:line
+        },
+        ...
+      ]
+    }
+
+where each ``<record>`` is the function shape below *without* the search-only
+``score``/``breakdown`` keys.
+
 Keeping rendering (``render.py``) and serialization (here) separate means the
 terminal output and the machine output can evolve independently, and the schema
 is trivial for an agent to consume.
@@ -44,6 +63,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from .dupes import Cluster
+from .parsers import FunctionRecord
 from .search import ScoredRecord
 
 #: Bump when the emitted JSON shape changes incompatibly. Independent of the
@@ -103,4 +124,55 @@ def results_to_dict(
         "intent": bool(intent),
         "count": len(matches),
         "results": matches,
+    }
+
+
+def record_to_dict(record: FunctionRecord) -> dict[str, Any]:
+    """Serialize a bare :class:`~deja.parsers.base.FunctionRecord` (no scoring).
+
+    Used by the ``dupes`` document, where members carry no per-query relevance —
+    only their location and shape. Mirrors the field set of
+    :func:`scored_to_dict` minus ``score``/``breakdown``.
+    """
+    return {
+        "name": record.name,
+        "qualname": record.qualname or record.name,
+        "file": record.file,
+        "line": record.line,
+        "signature": record.signature,
+        "docstring": record.docstring,
+        "lang": record.lang,
+    }
+
+
+def cluster_to_dict(cluster: Cluster) -> dict[str, Any]:
+    """Serialize one :class:`~deja.dupes.Cluster` to the stable cluster shape."""
+    return {
+        "size": cluster.size,
+        "score": _round(cluster.score),
+        "members": [record_to_dict(r) for r in cluster.members],
+    }
+
+
+def clusters_to_dict(
+    clusters: Iterable[Cluster],
+    *,
+    threshold: float,
+) -> dict[str, Any]:
+    """Build the top-level ``dupes`` result document (see module docstring).
+
+    Args:
+        clusters: Near-duplicate clusters from :func:`deja.dupes.find_clusters`,
+            already sorted largest-first.
+        threshold: The similarity cutoff (0-100) that produced *clusters*.
+
+    Returns:
+        A JSON-serializable dict with a stable, documented schema.
+    """
+    items = [cluster_to_dict(c) for c in clusters]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "threshold": _round(threshold),
+        "count": len(items),
+        "clusters": items,
     }

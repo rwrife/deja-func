@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Iterable
 
+from .dupes import Cluster
 from .search import ScoredRecord
 
 # Minimal ANSI; only used on a TTY (see _style).
@@ -94,4 +95,58 @@ def format_results(
             lines.append(_style(f"      {r.docstring}", _DIM, color=color))
         if explain:
             lines.append(_style(f"      {_explain_line(s)}", _DIM, color=color))
+    return "\n".join(lines)
+
+
+def _dupes_header(n: int, *, color: bool) -> str:
+    """A personality-laden header summarizing the redundancy verdict."""
+    if n == 0:
+        return "\u2728 No near-duplicate functions found — your inventory is lean."
+    if n == 1:
+        lead = "\u267b\ufe0f Found 1 cluster of near-duplicate functions:"
+    else:
+        lead = f"\u267b\ufe0f Found {n} clusters of near-duplicate functions:"
+    return _style(lead, _BOLD, color=color)
+
+
+def format_clusters(
+    clusters: Iterable[Cluster],
+    *,
+    color: bool | None = None,
+    stream=None,
+) -> str:
+    """Render near-duplicate *clusters* into a printable block of text.
+
+    Output per cluster::
+
+        ×3 · ~88% similar
+          name — file:line — signature
+              summary
+          name — file:line — signature
+          ...
+
+    Args:
+        clusters: Clusters from :func:`deja.dupes.find_clusters` (largest first).
+        color: Force ANSI on/off; ``None`` auto-detects from *stream*.
+        stream: Stream used for TTY detection when *color* is ``None``
+            (defaults to ``sys.stdout``).
+
+    Returns:
+        A newline-joined string ready to ``print``.
+    """
+    clusters = list(clusters)
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+
+    lines = [_dupes_header(len(clusters), color=color)]
+    for c in clusters:
+        summary = _style(f"\u00d7{c.size} · ~{c.score:.0f}% similar", _BOLD, color=color)
+        lines.append(f"  {summary}")
+        for r in c.members:
+            loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
+            name = _style(r.qualname or r.name, _BOLD, color=color)
+            sig = r.signature or "()"
+            lines.append(f"    {name} — {loc} — {sig}")
+            if r.docstring:
+                lines.append(_style(f"        {r.docstring}", _DIM, color=color))
     return "\n".join(lines)
