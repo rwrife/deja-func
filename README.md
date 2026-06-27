@@ -39,6 +39,10 @@ agents can query the inventory *before* writing code. See
 **`deja dupes` shipped:** the **redundancy report** — cluster near-identical
 functions across the repo so you can finally see "you have 6 date parsers". See
 [Find redundant functions](#find-redundant-functions-deja-dupes).
+**`deja hook` shipped:** a git **pre-commit / pre-push hook** that warns the
+moment a newly *staged* function strongly resembles existing code — catching
+redundancy *before* it lands, not in review. See
+[Warn on duplicates as you commit](#warn-on-duplicates-as-you-commit-deja-hook).
 
 ## Install (from source)
 
@@ -162,6 +166,51 @@ deja dupes --json | jq '.clusters[0].members[].file'
 
 It auto-builds the index on first run, and exits `0` when any redundancy is
 found / `1` when the inventory is clean — handy as a soft CI signal.
+
+### Warn on duplicates as you commit (`deja hook`)
+
+`deja dupes` and `deja find` are pull-based — you have to remember to run them.
+`deja hook` makes the nudge **push-based**: a git hook that fires while you
+commit and warns when a brand-new function strongly resembles one already in the
+index. Redundancy gets caught *before* it's written into history, not in PR
+review.
+
+```bash
+deja index                    # build the inventory to compare against
+deja hook install             # write a .git/hooks/pre-commit hook
+# → 🫠 Installed pre-commit redundancy hook → .git/hooks/pre-commit  [warn-only]
+```
+
+Now every `git commit` checks the functions you're about to add:
+
+```text
+🫠 1 staged function already exist(s) (heads-up):
+  parse_date_iso — dates.py:1 — (text: str)
+      ~98% similar to existing:
+      parse_iso_date — util.py:1 — (s: str)
+          Parse an ISO 8601 date string into a date object.
+  (warning only — commit proceeds; run with --strict to block)
+```
+
+By design it **warns but doesn't block** (PLAN.md §9: a hook that warns is in
+scope; hard gating isn't the product). A staged function is only ever compared
+against functions in *other* files, so editing an existing function never flags
+it as its own duplicate.
+
+```bash
+deja hook install --strict    # turn the nudge into a gate (fails the commit)
+deja hook install --pre-push  # run on push instead of commit
+deja hook install --force     # overwrite a pre-existing hook
+deja hook check               # run the check manually (what the hook calls)
+deja hook check -t 85         # only warn on very close matches
+deja hook check --json        # structured output for tooling
+```
+
+The installed hook is a tiny stub that just calls `deja hook check`, so upgrades
+to deja take effect immediately (nothing stale is frozen into `.git`). Skip it
+for one commit with `git commit --no-verify`. If you haven't run `deja index`
+yet, the hook stays quiet and reminds you to build the inventory — it never
+breaks a commit on its own.
 
 ## Use with AI agents
 

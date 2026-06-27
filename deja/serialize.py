@@ -53,6 +53,23 @@ Each ``<match>`` is::
 where each ``<record>`` is the function shape below *without* the search-only
 ``score``/``breakdown`` keys.
 
+``deja hook check --json`` (PLAN.md §8 #3) emits a sibling document defined here::
+
+    {
+      "schema_version": 1,
+      "threshold": 75.0,         # similarity cutoff used
+      "strict": false,           # whether the hook blocks on a match
+      "count": 1,                # number of staged dupes found
+      "matches": [
+        {
+          "score": 88.0,        # blended similarity of the pair
+          "staged": <record>,   # the about-to-be-committed function
+          "existing": <record>  # the function it resembles
+        },
+        ...
+      ]
+    }
+
 Keeping rendering (``render.py``) and serialization (here) separate means the
 terminal output and the machine output can evolve independently, and the schema
 is trivial for an agent to consume.
@@ -64,6 +81,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .dupes import Cluster
+from .hook import Match
 from .parsers import FunctionRecord
 from .search import ScoredRecord
 
@@ -175,4 +193,40 @@ def clusters_to_dict(
         "threshold": _round(threshold),
         "count": len(items),
         "clusters": items,
+    }
+
+
+def match_to_dict(match: Match) -> dict[str, Any]:
+    """Serialize one :class:`~deja.hook.Match` to the stable hook-match shape."""
+    return {
+        "score": _round(match.score),
+        "staged": record_to_dict(match.staged),
+        "existing": record_to_dict(match.existing),
+    }
+
+
+def matches_to_dict(
+    matches: Iterable[Match],
+    *,
+    threshold: float,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Build the top-level ``hook check`` result document (see module docstring).
+
+    Args:
+        matches: Redundancy matches from :func:`deja.hook.check_staged`,
+            already sorted strongest-first.
+        threshold: The similarity cutoff (0-100) that produced *matches*.
+        strict: Whether the hook is configured to block (echoed for tooling).
+
+    Returns:
+        A JSON-serializable dict with a stable, documented schema.
+    """
+    items = [match_to_dict(m) for m in matches]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "threshold": _round(threshold),
+        "strict": bool(strict),
+        "count": len(items),
+        "matches": items,
     }

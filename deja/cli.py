@@ -7,7 +7,9 @@ signature-shape search (`--sig`), intent weighting (`--intent`), and `--explain`
 M6 adds machine-readable output (`deja find --json`) and `deja mcp`, a stdio
 MCP server so AI agents query the inventory before writing code (see PLAN.md §6).
 `deja dupes` (PLAN.md §8 #1) reports clusters of near-identical functions — the
-redundancy report ("you have 6 date parsers").
+redundancy report ("you have 6 date parsers"). `deja hook` (PLAN.md §8 #3)
+installs a git pre-commit/pre-push hook that warns when a newly added function
+strongly matches existing code.
 Later commands (`stats`, `watch`, ...) arrive in subsequent milestones — see PLAN.md §7.
 """
 
@@ -152,6 +154,76 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON (stable schema) instead of pretty text.",
     )
     dupes.set_defaults(func=cmd_dupes)
+
+    hook = subparsers.add_parser(
+        "hook",
+        help="Install / run a git hook that warns when staged code duplicates existing functions.",
+    )
+    hook_sub = hook.add_subparsers(dest="hook_command", metavar="<action>")
+    # Bare `deja hook` prints this parser's help (mirrors top-level behavior).
+    hook.set_defaults(func=cmd_hook, _hook_parser=hook)
+
+    hook_install = hook_sub.add_parser(
+        "install",
+        help="Write a git pre-commit (or pre-push) redundancy-warning hook.",
+    )
+    hook_install.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Any path inside the target git repo (default: current directory).",
+    )
+    hook_install.add_argument(
+        "--pre-push",
+        action="store_const",
+        const="pre-push",
+        dest="hook_kind",
+        default="pre-commit",
+        help="Install as a pre-push hook instead of pre-commit.",
+    )
+    hook_install.add_argument(
+        "--strict",
+        action="store_true",
+        help="Bake in --strict so the hook *fails* the commit on a strong match.",
+    )
+    hook_install.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing hook even if deja didn't write it.",
+    )
+    hook_install.set_defaults(func=cmd_hook_install)
+
+    hook_check = hook_sub.add_parser(
+        "check",
+        help="Diff staged functions against the index and warn on strong matches "
+        "(run by the hook).",
+    )
+    hook_check.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Any path inside the target git repo (default: current directory).",
+    )
+    hook_check.add_argument(
+        "-t",
+        "--threshold",
+        type=float,
+        default=None,
+        metavar="N",
+        help="Similarity cutoff 0-100 to warn on (default: 75). Lower = more (noisier) warnings.",
+    )
+    hook_check.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero (fail the commit) when a strong match is found.",
+    )
+    hook_check.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit structured JSON (stable schema) instead of pretty text.",
+    )
+    hook_check.set_defaults(func=cmd_hook_check)
 
     return parser
 
@@ -306,6 +378,93 @@ def cmd_dupes(args: argparse.Namespace) -> int:
 
     print(format_clusters(clusters))
     return 0 if clusters else 1
+
+
+def cmd_hook_install(args: argparse.Namespace) -> int:
+    """Handle `deja hook install`: write the git redundancy hook (PLAN.md §8 #3)."""
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .hook import install_hook
+
+    try:
+        target = install_hook(
+            args.path,
+            hook=args.hook_kind,
+            strict=args.strict,
+            force=args.force,
+        )
+    except FileNotFoundError:
+        print("deja: not inside a git repository", file=sys.stderr)
+        return 2
+    except FileExistsError as exc:
+        print(f"deja: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:  # pragma: no cover - guarded by argparse choices
+        print(f"deja: {exc}", file=sys.stderr)
+        return 2
+
+    mode = "strict (blocks commits)" if args.strict else "warn-only"
+    print(f"\U0001fae0 Installed {args.hook_kind} redundancy hook → {target}  [{mode}]")
+    print("   It warns when a newly added function strongly matches existing code.")
+    print("   Tip: run `deja index` so there's an inventory to compare against.")
+    return 0
+
+
+def cmd_hook_check(args: argparse.Namespace) -> int:
+    """Handle `deja hook check`: warn on staged functions that already exist.
+
+    This is what the installed hook invokes. It compares each staged function
+    against the existing index and reports strong matches. By default it only
+    *warns* (exit 0) so it never blocks a commit; ``--strict`` makes a match
+    exit non-zero so git aborts the commit (PLAN.md §9: warn, don't gate).
+    """
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .dupes import DEFAULT_THRESHOLD
+    from .hook import check_staged, git_repo_root
+    from .index import index_path
+    from .render import format_matches
+
+    threshold = args.threshold if args.threshold is not None else DEFAULT_THRESHOLD
+    if not 0.0 <= threshold <= 100.0:
+        print("deja: --threshold must be between 0 and 100", file=sys.stderr)
+        return 2
+
+    try:
+        repo_root = git_repo_root(args.path)
+    except FileNotFoundError:
+        print("deja: not inside a git repository", file=sys.stderr)
+        return 2
+
+    # No index means nothing to compare against. Don't error (that would break
+    # commits for anyone who installed the hook before indexing); nudge instead.
+    if not index_path(repo_root).is_file():
+        if not getattr(args, "as_json", False):
+            print(
+                "\U0001f50e deja: no index yet — run `deja index` to enable redundancy warnings.",
+                file=sys.stderr,
+            )
+            return 0
+
+    matches = check_staged(repo_root, threshold=threshold)
+
+    if getattr(args, "as_json", False):
+        import json as _json
+
+        from .serialize import matches_to_dict
+
+        doc = matches_to_dict(matches, threshold=threshold, strict=args.strict)
+        print(_json.dumps(doc, indent=2, ensure_ascii=False))
+        # JSON mode mirrors strict exit semantics for tooling/CI.
+        return 1 if (matches and args.strict) else 0
+
+    print(format_matches(matches, strict=args.strict))
+    # Warn-only by default: a match never blocks the commit unless --strict.
+    return 1 if (matches and args.strict) else 0
+
+
+def cmd_hook(args: argparse.Namespace) -> int:
+    """Handle a bare `deja hook` (no action): show the hook help."""
+    args._hook_parser.print_help()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
