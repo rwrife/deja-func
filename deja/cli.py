@@ -97,6 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Weight the docstring higher for natural-language intent queries.",
     )
     find.add_argument(
+        "--semantic",
+        action="store_true",
+        help="Rank by meaning using local embeddings (needs the 'semantic' extra "
+        "or a running Ollama); falls back to fuzzy search if the backend is missing.",
+    )
+    find.add_argument(
         "--explain",
         action="store_true",
         help="Show why each result matched (per-signal score breakdown).",
@@ -261,7 +267,7 @@ def cmd_find(args: argparse.Namespace) -> int:
     # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
     from .index import build_index, load_index, save_index
     from .render import format_results
-    from .search import DEFAULT_LIMIT, search
+    from .search import DEFAULT_LIMIT, ScoredRecord, search
 
     query = args.query or ""
     sig = args.sig
@@ -295,13 +301,34 @@ def cmd_find(args: argparse.Namespace) -> int:
         save_index(index, root)
 
     limit = args.limit if args.limit is not None else DEFAULT_LIMIT
-    results = search(
-        query,
-        index.records,
-        limit=limit,
-        sig=sig,
-        intent=args.intent,
-    )
+
+    semantic = getattr(args, "semantic", False)
+    semantic_used = False
+    if semantic and query.strip():
+        # Heavy embedding code is imported *only* on this branch, so the default
+        # `deja find` path never pays for it (issue #9: zero impact when off).
+        from .semantic import load_backend, semantic_search
+
+        backend, message = load_backend()
+        if backend is None:
+            # Clear message + graceful fallback to fuzzy search (issue #9).
+            print(f"\U0001f9ea deja: {message}; falling back to fuzzy search.", file=sys.stderr)
+        else:
+            print(f"\U0001f9ea semantic search {message}", file=sys.stderr)
+            sem = semantic_search(query, index.records, backend, limit=limit, root=root)
+            # Adapt to the shared ScoredRecord shape so render/serialize are reused
+            # unchanged (semantic ranking carries no per-signal breakdown).
+            results = [ScoredRecord(record=s.record, score=s.score) for s in sem]
+            semantic_used = True
+
+    if not semantic_used:
+        results = search(
+            query,
+            index.records,
+            limit=limit,
+            sig=sig,
+            intent=args.intent,
+        )
 
     if getattr(args, "as_json", False):
         # Machine-readable path (M6): stable schema, no ANSI, no personality.
@@ -309,7 +336,9 @@ def cmd_find(args: argparse.Namespace) -> int:
 
         from .serialize import results_to_dict
 
-        doc = results_to_dict(results, query=query, sig=sig, intent=args.intent)
+        doc = results_to_dict(
+            results, query=query, sig=sig, intent=args.intent, semantic=semantic_used
+        )
         print(_json.dumps(doc, indent=2, ensure_ascii=False))
         return 0 if results else 1
 
