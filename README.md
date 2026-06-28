@@ -49,6 +49,10 @@ so intent queries land even when they share no words with your code. It's fully
 optional — off by default, no heavy import on the core path, and it falls back
 to fuzzy search with a clear message if no backend is installed. See
 [Semantic search](#semantic-search-deja-find---semantic).
+**`deja index --watch` shipped:** keep the index fresh automatically — it
+incrementally reparses **only the files you touch** (debounced) as you work,
+honoring the same `.gitignore`/exclude rules, and stops cleanly on Ctrl-C with a
+summary. See [Keep the index fresh](#keep-the-index-fresh-deja-index---watch).
 
 ## Install (from source)
 
@@ -79,6 +83,36 @@ JavaScript/TypeScript today), extracts each function/method's name, signature,
 docstring, and `file:line`, and saves them to a small, diffable JSON index. It
 respects your `.gitignore` and skips noise dirs (`.venv`, `node_modules`,
 `__pycache__`, …).
+
+### Keep the index fresh (`deja index --watch`)
+
+Don't re-run `deja index` by hand every time you save. `--watch` builds the index
+once, then stays running and **incrementally reindexes only the files that
+change** — created, modified, or deleted — never re-walking the whole tree:
+
+```bash
+deja index --watch                 # watch the current repo
+deja index path/to/project --watch # watch a specific directory
+# → 👁️  Watching . for changes (poll 1s, debounce 0.4s). Press Ctrl-C to stop.
+#   🔄 reindex: +1 new → 413 functions (+3/-0)
+#   🔄 reindex: ~1 changed → 414 functions (+2/-1)
+#   🔄 reindex: -1 gone → 412 functions (+0/-2)
+#   👋 Stopped watching. 3 reindex pass(es), 3 file event(s), net +1 function(s) over 92s.
+```
+
+Details:
+
+- **Touched-files only.** Each change reparses just that file and merges it into
+  the existing index, so a one-line edit doesn't cost a full rescan.
+- **Same rules as a full index.** It reuses the walker, so `.gitignore` and the
+  skip-dirs (`.venv`, `node_modules`, …) apply identically — a watched edit can
+  never sneak a vendored file into the index.
+- **Debounced.** A burst of saves (or a `git checkout`, or an editor's
+  atomic-rename) collapses into a single reindex once the filesystem settles.
+- **Dependency-free.** It polls file mtimes/sizes with the stdlib (no
+  `watchdog`/inotify dep). Tune it with `--interval` (poll seconds, default `1`)
+  and `--debounce` (quiet-window seconds, default `0.4`).
+- **Clean shutdown.** Ctrl-C stops the loop and prints a summary of the session.
 
 ### Multi-language: JavaScript & TypeScript (M5)
 

@@ -9,8 +9,9 @@ MCP server so AI agents query the inventory before writing code (see PLAN.md §6
 `deja dupes` (PLAN.md §8 #1) reports clusters of near-identical functions — the
 redundancy report ("you have 6 date parsers"). `deja hook` (PLAN.md §8 #3)
 installs a git pre-commit/pre-push hook that warns when a newly added function
-strongly matches existing code.
-Later commands (`stats`, `watch`, ...) arrive in subsequent milestones — see PLAN.md §7.
+strongly matches existing code. `deja index --watch` (PLAN.md §8 #2) keeps the
+index fresh by incrementally reparsing only changed files as you work.
+Later commands (`stats`, ...) arrive in subsequent milestones — see PLAN.md §7.
 """
 
 from __future__ import annotations
@@ -57,6 +58,27 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=".",
         help="Directory to index (default: current directory).",
+    )
+    index.add_argument(
+        "-w",
+        "--watch",
+        action="store_true",
+        help="Stay running and incrementally reindex files as they change "
+        "(debounced). Ctrl-C to stop with a summary.",
+    )
+    index.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="With --watch: seconds between filesystem polls (default: 1.0).",
+    )
+    index.add_argument(
+        "--debounce",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="With --watch: quiet window after the last change before reindexing (default: 0.4).",
     )
     index.set_defaults(func=cmd_index)
 
@@ -241,7 +263,12 @@ def cmd_hello(_args: argparse.Namespace) -> int:
 
 
 def cmd_index(args: argparse.Namespace) -> int:
-    """Handle `deja index`: build the index and write it to disk."""
+    """Handle `deja index`: build the index and write it to disk.
+
+    With ``--watch`` it instead builds (or loads) the index once and then stays
+    running, incrementally reindexing only changed files until Ctrl-C (issue
+    #10 / PLAN.md §8 #2).
+    """
     # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
     from .index import build_index, save_index
 
@@ -249,6 +276,19 @@ def cmd_index(args: argparse.Namespace) -> int:
     if not root.is_dir():
         print(f"deja: not a directory: {root}", file=sys.stderr)
         return 2
+
+    if getattr(args, "watch", False):
+        from .watch import DEFAULT_DEBOUNCE, DEFAULT_INTERVAL, run_watch
+
+        interval = args.interval if args.interval is not None else DEFAULT_INTERVAL
+        debounce = args.debounce if args.debounce is not None else DEFAULT_DEBOUNCE
+        if interval <= 0:
+            print("deja: --interval must be greater than 0", file=sys.stderr)
+            return 2
+        if debounce < 0:
+            print("deja: --debounce must be >= 0", file=sys.stderr)
+            return 2
+        return run_watch(root, interval=interval, debounce=debounce)
 
     index = build_index(root)
     out = save_index(index, root)
