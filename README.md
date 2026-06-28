@@ -43,6 +43,12 @@ functions across the repo so you can finally see "you have 6 date parsers". See
 moment a newly *staged* function strongly resembles existing code — catching
 redundancy *before* it lands, not in review. See
 [Warn on duplicates as you commit](#warn-on-duplicates-as-you-commit-deja-hook).
+**Semantic search shipped (optional):** `deja find --semantic` ranks by
+*meaning* using local embeddings (sentence-transformers or a running Ollama),
+so intent queries land even when they share no words with your code. It's fully
+optional — off by default, no heavy import on the core path, and it falls back
+to fuzzy search with a clear message if no backend is installed. See
+[Semantic search](#semantic-search-deja-find---semantic).
 
 ## Install (from source)
 
@@ -50,6 +56,14 @@ redundancy *before* it lands, not in review. See
 pipx install .                # or: uv tool install .
 deja --version                # deja-func 0.1.0
 deja hello                    # 🫠 say hi
+```
+
+Want **semantic search** (`deja find --semantic`)? Install the optional extra to
+pull in the local embedding model (or point it at a running Ollama instead — see
+[Semantic search](#semantic-search-deja-find---semantic)):
+
+```bash
+pipx install '.[semantic]'    # adds sentence-transformers for --semantic
 ```
 
 ## Usage
@@ -127,6 +141,51 @@ deja find "validate" --sig "(str)->bool" --explain
 #     validate_email — util.py:1 — (addr: str) -> bool
 #         Validate an email address and return True if it looks valid.
 #         score 100  (name 100 · sig 100 · doc 88)
+```
+
+### Semantic search (`deja find --semantic`)
+
+Fuzzy search matches *words*. Sometimes you know what you want but not what you
+called it — your query and the function share **meaning** but no tokens. `--semantic`
+ranks by embedding similarity so "turn a blob of HTML into clean text" finds
+`strip_markup` even with a terse docstring:
+
+```bash
+deja find "convert html into readable text" --semantic
+# 🧪 semantic search using sentence-transformers:all-MiniLM-L6-v2
+# 🫠 You already wrote this:
+#     strip_markup — render.py:42 — (s: str) -> str
+#         Convert HTML into plain text.
+```
+
+It's **opt-in and dependency-light by design** (PLAN.md §9: no mandatory LLM in
+the core):
+
+- **Off by default — zero cost when unused.** The embedding code (and its heavy
+  deps) is only imported when you pass `--semantic`; plain `deja find` never
+  touches it.
+- **Two backends, auto-detected.** Install the extra for a local
+  sentence-transformers model, *or* run [Ollama](https://ollama.com) and deja
+  will talk to it — no Python ML deps needed:
+
+  ```bash
+  pipx install '.[semantic]'                 # local sentence-transformers, or…
+  DEJA_EMBED_BACKEND=ollama deja find "…" --semantic   # use a running Ollama
+  ```
+
+- **Cached + incremental.** Embeddings live in `.dejafunc/embeddings.json`, keyed
+  by a content fingerprint of each function. Re-running only embeds the functions
+  that actually **changed**; everything else is reused.
+- **Graceful fallback.** If no backend is installed/reachable, deja prints a clear
+  one-liner and **falls back to fuzzy search** instead of erroring — so
+  `--semantic` is always safe to leave in a script.
+
+Knobs (all optional environment variables):
+
+```bash
+DEJA_EMBED_BACKEND=sentence-transformers   # force a backend (or: ollama)
+DEJA_EMBED_MODEL=all-MiniLM-L6-v2          # pick the embedding model
+OLLAMA_HOST=http://localhost:11434         # where the Ollama daemon lives
 ```
 
 ### Find redundant functions (`deja dupes`)

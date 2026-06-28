@@ -12,6 +12,7 @@ A ``find`` result document is::
       "query": "slugify",          # the textual query (may be "")
       "sig": "(str)->bool",        # the --sig shape, or null
       "intent": false,             # whether intent weighting was on
+      "semantic": false,           # whether embedding-based ranking was used
       "count": 2,                  # number of matches returned
       "results": [ <match>, ... ]  # best first
     }
@@ -122,14 +123,18 @@ def results_to_dict(
     query: str = "",
     sig: str | None = None,
     intent: bool = False,
+    semantic: bool = False,
 ) -> dict[str, Any]:
     """Build the top-level ``find`` result document (see module docstring).
 
     Args:
-        results: Ranked matches from :func:`deja.search.search`.
+        results: Ranked matches from :func:`deja.search.search` (or
+            :func:`deja.semantic.semantic_search`).
         query: The textual query that produced *results* (echoed back).
         sig: The ``--sig`` shape string, if any.
         intent: Whether intent weighting was applied.
+        semantic: Whether embedding-based semantic ranking produced *results*
+            (when true, per-match ``breakdown`` values are all ``null``).
 
     Returns:
         A JSON-serializable dict with a stable, documented schema.
@@ -140,6 +145,7 @@ def results_to_dict(
         "query": query,
         "sig": sig,
         "intent": bool(intent),
+        "semantic": bool(semantic),
         "count": len(matches),
         "results": matches,
     }

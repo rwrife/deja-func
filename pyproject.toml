@@ -35,6 +35,13 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.4",
 ]
+# Optional embedding-based semantic search (`deja find --semantic`, PLAN.md §8 #4).
+# Kept out of the core so the default install stays tiny and import-light; the
+# heavy model deps are only pulled in when a user opts into `[semantic]`. The
+# Ollama backend needs no Python dep (stdlib urllib talks to the daemon).
+semantic = [
+    "sentence-transformers>=2.2",
+]
 
 [project.urls]
 Homepage = "https://github.com/rwrife/deja-func"
