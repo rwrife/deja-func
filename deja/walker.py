@@ -63,6 +63,65 @@ def _load_gitignore(root: Path):
     return None  # pragma: no cover
 
 
+def _default_has_parser(rel: str) -> bool:
+    """Default parseability predicate: does a language parser claim *rel*?"""
+    from .parsers import get_parser_for_path
+
+    return get_parser_for_path(rel) is not None
+
+
+def is_indexable_file(
+    root: str | os.PathLike[str],
+    rel_path: str,
+    *,
+    has_parser=None,
+    spec=None,
+) -> bool:
+    """Return whether a single repo-relative path belongs in the index.
+
+    Applies exactly the same rules as :func:`iter_source_files` — a registered
+    parser, no :data:`ALWAYS_SKIP_DIRS` component, and not matched by the root
+    ``.gitignore`` — but for one arbitrary path. The incremental watcher uses
+    this to decide whether a just-touched file should be (re)parsed, so a watched
+    edit honors the very same exclude rules as a full ``deja index`` run
+    (issue #10).
+
+    Args:
+        root: Repo root the path is relative to.
+        rel_path: Repo-relative path (POSIX or OS separators both accepted).
+        has_parser: Optional parseability predicate; defaults to the registry.
+        spec: Optional pre-compiled gitignore ``PathSpec`` to reuse across many
+            calls (avoids re-reading ``.gitignore`` per file). Loaded on demand
+            when ``None``.
+    """
+    if has_parser is None:
+        has_parser = _default_has_parser
+
+    rel_posix = Path(rel_path).as_posix()
+    parts = rel_posix.split("/")
+
+    # Any skipped directory anywhere in the path disqualifies it (mirrors the
+    # in-place pruning os.walk does during a full walk).
+    if any(part in ALWAYS_SKIP_DIRS for part in parts[:-1]):
+        return False
+
+    if not has_parser(rel_posix):
+        return False
+
+    if spec is None:
+        spec = _load_gitignore(Path(root).resolve())
+    if spec is not None:
+        # A file is ignored if it — or any ancestor directory — is gitignored.
+        if spec.match_file(rel_posix):
+            return False
+        for i in range(1, len(parts)):
+            ancestor = "/".join(parts[:i]) + "/"
+            if spec.match_file(ancestor):
+                return False
+
+    return True
+
+
 def iter_source_files(
     root: str | os.PathLike[str],
     *,
@@ -84,10 +143,7 @@ def iter_source_files(
     spec = _load_gitignore(root_path)
 
     if has_parser is None:
-        from .parsers import get_parser_for_path
-
-        def has_parser(rel: str) -> bool:  # noqa: E306 - small local default
-            return get_parser_for_path(rel) is not None
+        has_parser = _default_has_parser
 
     def is_ignored(rel_posix: str, *, is_dir: bool) -> bool:
         if spec is None:

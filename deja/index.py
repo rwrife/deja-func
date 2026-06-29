@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -108,3 +109,65 @@ def load_index(root: str | os.PathLike[str]) -> Index:
         raise FileNotFoundError(f"No index found at {path}. Run `deja index` first.")
     data = json.loads(path.read_text(encoding="utf-8"))
     return Index.from_dict(data)
+
+
+def parse_file(root: str | os.PathLike[str], rel_path: str) -> list[FunctionRecord]:
+    """Parse a single repo-relative file and return its records (``[]`` on miss).
+
+    Mirrors the per-file logic inside :func:`build_index` so the incremental
+    watcher (issue #10) reparses exactly one file the same way a full index does.
+    Unreadable files, files with no parser, and syntax errors all yield ``[]``
+    rather than raising.
+    """
+    parser = get_parser_for_path(rel_path)
+    if parser is None:
+        return []
+    try:
+        source = (Path(root) / rel_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return parser.parse(source, rel_path)
+
+
+def apply_changes(
+    index: Index,
+    root: str | os.PathLike[str],
+    changed: Iterable[str],
+    removed: Iterable[str] = (),
+) -> tuple[int, int]:
+    """Incrementally update *index* in place for a set of touched files.
+
+    Only the named files are reparsed — the rest of the index is left untouched
+    (issue #10: "only reparses touched files, not the whole tree"). For each path
+    in *changed* (created or modified) the file's old records are dropped and it
+    is reparsed; each path in *removed* (deleted) simply has its records pruned.
+    Ordering (by file, then line) is restored so the index stays deterministic.
+
+    Args:
+        index: The in-memory index to mutate.
+        root: Repo root the paths are relative to.
+        changed: Repo-relative paths that were created or modified.
+        removed: Repo-relative paths that were deleted.
+
+    Returns:
+        ``(added, dropped)`` — how many records were added and removed overall.
+    """
+    changed = {Path(p).as_posix() for p in changed}
+    removed = {Path(p).as_posix() for p in removed}
+    touched = changed | removed
+
+    before = len(index.records)
+    # Drop every record belonging to a touched file in a single pass.
+    kept = [r for r in index.records if r.file not in touched]
+    dropped_records = before - len(kept)
+
+    new_records: list[FunctionRecord] = []
+
+    for rel in sorted(changed):
+        new_records.extend(parse_file(root, rel))
+
+    kept.extend(new_records)
+    kept.sort(key=lambda r: (r.file, r.line))
+    index.records = kept
+
+    return len(new_records), dropped_records
