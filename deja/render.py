@@ -20,11 +20,13 @@ from collections.abc import Iterable
 from .dupes import Cluster
 from .hook import Match
 from .search import ScoredRecord
+from .stats import Stats
 
 # Minimal ANSI; only used on a TTY (see _style).
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _CYAN = "\033[36m"
+_MAGENTA = "\033[35m"
 _RESET = "\033[0m"
 
 
@@ -215,4 +217,89 @@ def format_matches(
                 color=color,
             )
         )
+    return "\n".join(lines)
+
+
+def _stats_header(stats: Stats, *, color: bool) -> str:
+    """A personality-laden one-liner summarizing the inventory size."""
+    if stats.is_empty:
+        return "\U0001f9e0 Nothing indexed yet — run `deja index` to build your inventory."
+    funcs = stats.total_functions
+    files = stats.total_files
+    f_noun = "function" if funcs == 1 else "functions"
+    file_noun = "file" if files == 1 else "files"
+    lead = f"\U0001f9e0 {funcs} {f_noun} across {files} {file_noun}."
+    return _style(lead, _BOLD, color=color)
+
+
+def _stats_leaderboard(
+    title: str,
+    rows: Iterable[tuple[str, int]],
+    *,
+    color: bool,
+) -> list[str]:
+    """Render one ``title`` + ``label (×count)`` leaderboard block (or nothing)."""
+    rows = list(rows)
+    if not rows:
+        return []
+    out = [_style(f"  {title}", _BOLD, color=color)]
+    for label, count in rows:
+        name = _style(label, _CYAN, color=color)
+        out.append(f"    {name} {_style(f'(×{count})', _DIM, color=color)}")
+    return out
+
+
+def format_stats(
+    stats: Stats,
+    *,
+    color: bool | None = None,
+    stream=None,
+) -> str:
+    """Render an inventory ``stats`` summary into a printable block of text.
+
+    Output::
+
+        \U0001f9e0 180 functions across 24 files.
+        python: 142 · javascript: 38
+          Most duplicated names
+            parse (×6)
+            slugify (×4)
+          Biggest files by function count
+            src/text.py (×19)
+        \U0001f62c "parse" shows up 6 times — sure you need all of them?
+
+    Args:
+        stats: Aggregated inventory from :func:`deja.stats.compute_stats`
+            (leaderboards already sorted and capped to ``--top``).
+        color: Force ANSI on/off; ``None`` auto-detects from *stream*.
+        stream: Stream used for TTY detection when *color* is ``None``
+            (defaults to ``sys.stdout``).
+
+    Returns:
+        A newline-joined string ready to ``print``.
+    """
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+
+    lines = [_stats_header(stats, color=color)]
+    if stats.is_empty:
+        return "\n".join(lines)
+
+    # Language breakdown reads naturally inline: ``python: 142 · javascript: 38``.
+    if stats.languages:
+        breakdown = " · ".join(f"{lang}: {n}" for lang, n in stats.languages)
+        lines.append(_style(f"  {breakdown}", _DIM, color=color))
+
+    lines.extend(_stats_leaderboard("Most duplicated names", stats.top_names, color=color))
+    lines.extend(
+        _stats_leaderboard("Biggest files by function count", stats.biggest_files, color=color)
+    )
+
+    # One-line nudge when a single name is conspicuously over-represented.
+    callout = stats.top_duplicate
+    if callout is not None:
+        name, count = callout
+        line = f'\U0001f62c "{name}" shows up {count} times — sure you need all of them?'
+        lines.append(_style(line, _MAGENTA, color=color))
+
     return "\n".join(lines)

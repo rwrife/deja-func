@@ -54,6 +54,26 @@ Each ``<match>`` is::
 where each ``<record>`` is the function shape below *without* the search-only
 ``score``/``breakdown`` keys.
 
+``deja stats --json`` (PLAN.md §8 #10) emits a sibling document defined here::
+
+    {
+      "schema_version": 1,
+      "total_functions": 180,        # total indexed function records
+      "total_files": 24,             # distinct files represented
+      "top": 10,                     # the --top cap applied to leaderboards
+      "languages": [                 # full breakdown, most functions first
+        {"lang": "python", "count": 142},
+        {"lang": "javascript", "count": 38}
+      ],
+      "top_names": [                 # most-duplicated bare names (count >= 2)
+        {"name": "parse", "count": 6},
+        {"name": "slugify", "count": 4}
+      ],
+      "biggest_files": [            # files with the most functions
+        {"file": "src/text.py", "count": 19}
+      ]
+    }
+
 ``deja hook check --json`` (PLAN.md §8 #3) emits a sibling document defined here::
 
     {
@@ -85,6 +105,7 @@ from .dupes import Cluster
 from .hook import Match
 from .parsers import FunctionRecord
 from .search import ScoredRecord
+from .stats import Stats
 
 #: Bump when the emitted JSON shape changes incompatibly. Independent of the
 #: on-disk index ``SCHEMA_VERSION`` — this versions the *wire* format.
@@ -199,6 +220,30 @@ def clusters_to_dict(
         "threshold": _round(threshold),
         "count": len(items),
         "clusters": items,
+    }
+
+
+def stats_to_dict(stats: Stats) -> dict[str, Any]:
+    """Build the top-level ``stats`` result document (see module docstring).
+
+    The numbers exactly mirror the text view rendered by
+    :func:`deja.render.format_stats` (same totals, same already-capped
+    leaderboards), so an agent consuming JSON sees what a human would.
+
+    Args:
+        stats: Aggregated inventory from :func:`deja.stats.compute_stats`.
+
+    Returns:
+        A JSON-serializable dict with a stable, documented schema.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "total_functions": stats.total_functions,
+        "total_files": stats.total_files,
+        "top": stats.top,
+        "languages": [{"lang": lang, "count": n} for lang, n in stats.languages],
+        "top_names": [{"name": name, "count": n} for name, n in stats.top_names],
+        "biggest_files": [{"file": path, "count": n} for path, n in stats.biggest_files],
     }
 
 
