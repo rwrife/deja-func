@@ -91,6 +91,24 @@ where each ``<record>`` is the function shape below *without* the search-only
       ]
     }
 
+``deja stale --json`` (PLAN.md §8 #9) emits a sibling document defined here::
+
+    {
+      "schema_version": 1,
+      "lang": null,              # the --lang filter, or null for all
+      "ignore": ["__*__", ...],  # effective ignore globs applied
+      "scanned": 180,            # functions considered (after --lang filter)
+      "ignored": 12,             # functions skipped by an ignore pattern
+      "count": 3,                # number of dead-code candidates
+      "candidates": [
+        {
+          "references": 0,      # external word-boundary references found
+          "function": <record>  # the bare function shape (no score/breakdown)
+        },
+        ...
+      ]
+    }
+
 Keeping rendering (``render.py``) and serialization (here) separate means the
 terminal output and the machine output can evolve independently, and the schema
 is trivial for an agent to consume.
@@ -105,6 +123,7 @@ from .dupes import Cluster
 from .hook import Match
 from .parsers import FunctionRecord
 from .search import ScoredRecord
+from .stale import StaleFunction, StaleReport
 from .stats import Stats
 
 #: Bump when the emitted JSON shape changes incompatibly. Independent of the
@@ -244,6 +263,35 @@ def stats_to_dict(stats: Stats) -> dict[str, Any]:
         "languages": [{"lang": lang, "count": n} for lang, n in stats.languages],
         "top_names": [{"name": name, "count": n} for name, n in stats.top_names],
         "biggest_files": [{"file": path, "count": n} for path, n in stats.biggest_files],
+    }
+
+
+def stale_to_dict(report: StaleReport) -> dict[str, Any]:
+    """Build the top-level ``stale`` result document (see module docstring).
+
+    Args:
+        report: Result of :func:`deja.stale.find_stale` (candidates already
+            deterministically sorted).
+
+    Returns:
+        A JSON-serializable dict with a stable, documented schema.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "lang": report.lang,
+        "ignore": list(report.ignore_patterns),
+        "scanned": report.scanned_functions,
+        "ignored": report.ignored,
+        "count": len(report.candidates),
+        "candidates": [stale_function_to_dict(s) for s in report.candidates],
+    }
+
+
+def stale_function_to_dict(stale: StaleFunction) -> dict[str, Any]:
+    """Serialize one :class:`~deja.stale.StaleFunction` to the stable shape."""
+    return {
+        "references": stale.references,
+        "function": record_to_dict(stale.record),
     }
 
 

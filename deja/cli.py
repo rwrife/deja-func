@@ -13,6 +13,9 @@ strongly matches existing code. `deja index --watch` (PLAN.md §8 #2) keeps the
 index fresh by incrementally reparsing only changed files as you work.
 `deja stats` (PLAN.md §8 #10) zooms out to an inventory leaderboard: totals,
 language breakdown, the most-duplicated names, and the biggest files.
+`deja stale` (PLAN.md §8 #9) is the complement to `find`: it lists dead-code
+candidates — indexed functions whose names are never referenced anywhere else
+in the same tree (a fast string-level heuristic, not a call graph).
 Later commands arrive in subsequent milestones — see PLAN.md §7.
 """
 
@@ -210,6 +213,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON (stable schema) instead of pretty text.",
     )
     stats.set_defaults(func=cmd_stats)
+
+    stale = subparsers.add_parser(
+        "stale",
+        help="List dead-code candidates: indexed functions whose names are never used elsewhere.",
+    )
+    stale.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repo root to scan (default: current directory).",
+    )
+    stale.add_argument(
+        "--ignore",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Extra name glob to treat as never-stale (repeatable), layered on "
+        "the built-in defaults (__*__, main, test_*, setUp/tearDown, …).",
+    )
+    stale.add_argument(
+        "--lang",
+        default=None,
+        metavar="LANG",
+        help="Only report functions in this language (e.g. python, javascript). "
+        "The reference scan still covers every file.",
+    )
+    stale.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit structured JSON (stable schema) instead of pretty text.",
+    )
+    stale.set_defaults(func=cmd_stale)
 
     hook = subparsers.add_parser(
         "hook",
@@ -523,6 +559,76 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
     print(format_stats(stats))
     return 0 if not stats.is_empty else 1
+
+
+def cmd_stale(args: argparse.Namespace) -> int:
+    """Handle `deja stale`: list dead-code candidates (PLAN.md §8 #9).
+
+    Loads the index for the target repo (auto-building it first if none exists,
+    exactly like ``deja find``/``deja dupes``/``deja stats`` so first-run just
+    works), then scans the *same* file set the index was built from for
+    word-boundary references to each function's name. Functions whose names are
+    never referenced outside their own definition are reported as heuristic
+    dead-code *candidates*.
+
+    The reference scan always covers every indexed file; ``--lang`` narrows only
+    which functions are reported, not which files are searched (so a Python
+    helper called only from JS is not falsely flagged). Exit code is 0 when any
+    candidate is found and 1 when nothing is stale, so it's scriptable / CI-
+    friendly.
+    """
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .index import build_index, load_index, save_index
+    from .render import format_stale
+    from .stale import find_stale
+    from .walker import iter_source_files
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    try:
+        index = load_index(root)
+    except FileNotFoundError:
+        # No index yet: build one on the fly so first-run is friction-free
+        # (mirrors `deja find` / `deja dupes` / `deja stats`).
+        print("\U0001f50e No index yet — building one first…", file=sys.stderr)
+        index = build_index(root)
+        save_index(index, root)
+
+    # Read source relative to the repo root, matching how `build_index` reads it
+    # (same encoding + error policy). Returning None skips an unreadable file.
+    root_path = Path(root).resolve()
+
+    def read_source(rel: str) -> str | None:
+        try:
+            return (root_path / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+    # Scan exactly the files `deja index` would parse (same gitignore/skip rules).
+    files = iter_source_files(root_path)
+
+    report = find_stale(
+        index.records,
+        files,
+        read_source,
+        ignore=args.ignore,
+        lang=args.lang,
+    )
+
+    if getattr(args, "as_json", False):
+        # Machine-readable path: stable schema, no ANSI, no personality.
+        import json as _json
+
+        from .serialize import stale_to_dict
+
+        print(_json.dumps(stale_to_dict(report), indent=2, ensure_ascii=False))
+        return 0 if not report.is_empty else 1
+
+    print(format_stale(report))
+    return 0 if not report.is_empty else 1
 
 
 def cmd_hook_install(args: argparse.Namespace) -> int:
