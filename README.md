@@ -53,6 +53,10 @@ to fuzzy search with a clear message if no backend is installed. See
 incrementally reparses **only the files you touch** (debounced) as you work,
 honoring the same `.gitignore`/exclude rules, and stops cleanly on Ctrl-C with a
 summary. See [Keep the index fresh](#keep-the-index-fresh-deja-index---watch).
+**`deja stats` shipped:** an inventory **leaderboard** — totals, language
+breakdown, the most-duplicated function names, and the biggest files by function
+count, in one skimmable view (the *"you have 6 date parsers"* readout at a
+glance). See [See your inventory at a glance](#see-your-inventory-at-a-glance-deja-stats).
 
 ## Install (from source)
 
@@ -259,6 +263,39 @@ deja dupes --json | jq '.clusters[0].members[].file'
 
 It auto-builds the index on first run, and exits `0` when any redundancy is
 found / `1` when the inventory is clean — handy as a soft CI signal.
+
+### See your inventory at a glance (`deja stats`)
+
+`find` and `dupes` are lookups; `deja stats` is the **bird's-eye view**. It
+aggregates the existing index into a single skimmable leaderboard — no new
+parsing, no new dependencies — so you can size up a codebase's function
+inventory in one glance:
+
+```bash
+deja stats                    # summarize this repo
+deja stats path/to/project    # ...a specific directory
+# → 🧠 180 functions across 24 files.
+#     python: 142 · javascript: 38
+#       Most duplicated names
+#         parse (×6)
+#         slugify (×4)
+#       Biggest files by function count
+#         src/text.py (×19)
+#     😬 "parse" shows up 6 times — sure you need all of them?
+```
+
+It reports **totals** (functions + files), a full **language breakdown**, the
+most-repeated **bare function names** (the duplication leaderboard — only names
+that actually repeat show up), and the **biggest files by function count**. Cap
+each leaderboard with `-t/--top` (default `10`), and add `--json` for tooling:
+
+```bash
+deja stats --top 5            # shorter leaderboards
+deja stats --json | jq '.top_names[0]'
+```
+
+Like the other commands it auto-builds the index on first run, and exits `0`
+whenever there's something to report / `1` on an empty inventory.
 
 ### Warn on duplicates as you commit (`deja hook`)
 

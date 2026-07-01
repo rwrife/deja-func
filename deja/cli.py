@@ -11,7 +11,9 @@ redundancy report ("you have 6 date parsers"). `deja hook` (PLAN.md §8 #3)
 installs a git pre-commit/pre-push hook that warns when a newly added function
 strongly matches existing code. `deja index --watch` (PLAN.md §8 #2) keeps the
 index fresh by incrementally reparsing only changed files as you work.
-Later commands (`stats`, ...) arrive in subsequent milestones — see PLAN.md §7.
+`deja stats` (PLAN.md §8 #10) zooms out to an inventory leaderboard: totals,
+language breakdown, the most-duplicated names, and the biggest files.
+Later commands arrive in subsequent milestones — see PLAN.md §7.
 """
 
 from __future__ import annotations
@@ -182,6 +184,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON (stable schema) instead of pretty text.",
     )
     dupes.set_defaults(func=cmd_dupes)
+
+    stats = subparsers.add_parser(
+        "stats",
+        help="Show an inventory leaderboard: totals, languages, top dupes, biggest files.",
+    )
+    stats.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repo root to summarize (default: current directory).",
+    )
+    stats.add_argument(
+        "-t",
+        "--top",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Cap each leaderboard section to the top N rows (default: 10).",
+    )
+    stats.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit structured JSON (stable schema) instead of pretty text.",
+    )
+    stats.set_defaults(func=cmd_stats)
 
     hook = subparsers.add_parser(
         "hook",
@@ -447,6 +475,54 @@ def cmd_dupes(args: argparse.Namespace) -> int:
 
     print(format_clusters(clusters))
     return 0 if clusters else 1
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    """Handle `deja stats`: print an inventory leaderboard (PLAN.md §8 #10).
+
+    Loads the index for the target repo (auto-building it first if none exists,
+    exactly like ``deja find``/``deja dupes`` so first-run just works), aggregates
+    it, and prints totals, language breakdown, the most-duplicated names, and the
+    biggest files by function count. Exit code is 0 whenever there's anything to
+    report and 1 only on a genuinely empty inventory, so it's scriptable.
+    """
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .index import build_index, load_index, save_index
+    from .render import format_stats
+    from .stats import DEFAULT_TOP, compute_stats
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    top = args.top if args.top is not None else DEFAULT_TOP
+    if top < 0:
+        print("deja: --top must be >= 0", file=sys.stderr)
+        return 2
+
+    try:
+        index = load_index(root)
+    except FileNotFoundError:
+        # No index yet: build one on the fly so first-run is friction-free
+        # (mirrors `deja find` / `deja dupes`).
+        print("\U0001f50e No index yet — building one first…", file=sys.stderr)
+        index = build_index(root)
+        save_index(index, root)
+
+    stats = compute_stats(index.records, top=top)
+
+    if getattr(args, "as_json", False):
+        # Machine-readable path: stable schema, no ANSI, no personality.
+        import json as _json
+
+        from .serialize import stats_to_dict
+
+        print(_json.dumps(stats_to_dict(stats), indent=2, ensure_ascii=False))
+        return 0 if not stats.is_empty else 1
+
+    print(format_stats(stats))
+    return 0 if not stats.is_empty else 1
 
 
 def cmd_hook_install(args: argparse.Namespace) -> int:
