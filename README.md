@@ -57,6 +57,11 @@ summary. See [Keep the index fresh](#keep-the-index-fresh-deja-index---watch).
 breakdown, the most-duplicated function names, and the biggest files by function
 count, in one skimmable view (the *"you have 6 date parsers"* readout at a
 glance). See [See your inventory at a glance](#see-your-inventory-at-a-glance-deja-stats).
+**`deja stale` shipped:** the flip side of `find` — a **dead-code candidate**
+finder that lists indexed functions whose names are never referenced anywhere
+else in the tree. It's a fast, conservative string-level heuristic (not a call
+graph), so results are *candidates* to review, not proof. See
+[Find dead-code candidates](#find-dead-code-candidates-deja-stale).
 
 ## Install (from source)
 
@@ -296,6 +301,46 @@ deja stats --json | jq '.top_names[0]'
 
 Like the other commands it auto-builds the index on first run, and exits `0`
 whenever there's something to report / `1` on an empty inventory.
+
+### Find dead-code candidates (`deja stale`)
+
+If `deja find` answers *"have I written this before?"*, `deja stale` answers the
+complement: *"is this still used at all?"* It reuses the same inventory and file
+walk, then flags functions whose names never appear **outside their own
+definition** anywhere in the indexed tree — strong dead-code candidates to prune:
+
+```bash
+deja stale                    # scan this repo for unused functions
+deja stale path/to/project    # ...a specific directory
+# → 🪦 2 dead-code candidates — names never referenced elsewhere:
+#     old_helper — src/util.py:42 — (x: int) -> int
+#     legacy_parse — src/text.py:88 — (s: str) -> Date
+#   🧪 Heuristic: string-level scan, not a call graph — reflection or dynamic
+#      dispatch can hide real uses. Review before deleting.
+```
+
+**These are candidates, not proof.** The scan is deliberately *string-level* —
+it matches whole-word name references (`parse` never matches inside `parseAll`)
+over exactly the files `deja index` parsed. It does **not** follow a real call
+graph (that's an LSP, out of scope), so dynamic dispatch, reflection,
+string-keyed registries, and cross-language calls can hide a genuine use. Treat
+the list as a review queue, not a delete list.
+
+Common entry points are ignored by default so they aren't falsely flagged
+(`__*__` dunders, `main`, `test_*`, `setUp`/`tearDown` and friends). Add your
+own patterns, filter by language, or emit JSON:
+
+```bash
+deja stale --ignore "cli_*" --ignore "handle_*"   # never flag these names
+deja stale --lang python                          # only report Python functions
+deja stale --json | jq '.candidates[].function.name'
+```
+
+`--lang` narrows only *which functions are reported* — the reference scan always
+covers every file, so a helper called only from another language isn't flagged.
+Like the other commands it auto-builds the index on first run, and exits `0`
+when any candidate is found / `1` when nothing is stale (scriptable / CI-
+friendly).
 
 ### Warn on duplicates as you commit (`deja hook`)
 

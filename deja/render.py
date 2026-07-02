@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from .dupes import Cluster
 from .hook import Match
 from .search import ScoredRecord
+from .stale import StaleReport
 from .stats import Stats
 
 # Minimal ANSI; only used on a TTY (see _style).
@@ -301,5 +302,69 @@ def format_stats(
         name, count = callout
         line = f'\U0001f62c "{name}" shows up {count} times — sure you need all of them?'
         lines.append(_style(line, _MAGENTA, color=color))
+
+    return "\n".join(lines)
+
+
+def _stale_header(report: StaleReport, *, color: bool) -> str:
+    """A personality-laden header summarizing the dead-code verdict."""
+    n = len(report)
+    scope = f" ({report.lang})" if report.lang else ""
+    if n == 0:
+        return _style(
+            f"\U0001f9f9 No dead-code candidates{scope} — every function is referenced somewhere.",
+            _BOLD,
+            color=color,
+        )
+    noun = "candidate" if n == 1 else "candidates"
+    lead = f"\U0001faa6 {n} dead-code {noun}{scope} — names never referenced elsewhere:"
+    return _style(lead, _BOLD, color=color)
+
+
+def format_stale(
+    report: StaleReport,
+    *,
+    color: bool | None = None,
+    stream=None,
+) -> str:
+    """Render a :class:`~deja.stale.StaleReport` into a printable block of text.
+
+    Output::
+
+        \U0001faa6 2 dead-code candidates — names never referenced elsewhere:
+          old_helper — src/util.py:42 — (x: int) -> int
+          legacy_parse — src/text.py:88 — (s: str) -> Date
+        \U0001f9ea Heuristic: string-level scan, not a call graph — reflection or
+           dynamic dispatch can hide real uses. Review before deleting.
+
+    Args:
+        report: Result of :func:`deja.stale.find_stale` (candidates already
+            deterministically sorted by file, line, then name).
+        color: Force ANSI on/off; ``None`` auto-detects from *stream*.
+        stream: Stream used for TTY detection when *color* is ``None``
+            (defaults to ``sys.stdout``).
+
+    Returns:
+        A newline-joined string ready to ``print``.
+    """
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+
+    lines = [_stale_header(report, color=color)]
+    for stale in report.candidates:
+        r = stale.record
+        loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
+        name = _style(r.qualname or r.name, _BOLD, color=color)
+        sig = r.signature or "()"
+        lines.append(f"  {name} — {loc} — {sig}")
+
+    # Always print the caveat when there's something to review: these are
+    # candidates, not proof (acceptance criterion: clearly label as heuristic).
+    if not report.is_empty:
+        caveat = (
+            "\U0001f9ea Heuristic: string-level scan, not a call graph — reflection or "
+            "dynamic dispatch can hide real uses. Review before deleting."
+        )
+        lines.append(_style(caveat, _DIM, color=color))
 
     return "\n".join(lines)
