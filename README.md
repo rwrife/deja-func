@@ -387,6 +387,50 @@ for one commit with `git commit --no-verify`. If you haven't run `deja index`
 yet, the hook stays quiet and reminds you to build the inventory — it never
 breaks a commit on its own.
 
+## Configure with `.dejafunc.toml`
+
+As the flags pile up, drop an **optional** `.dejafunc.toml` at your repo root to
+pin a project's include/exclude globs and ranking weights once instead of
+re-passing them every run. It's fully optional: **no file (or an empty one) means
+exactly today's behavior, byte-for-byte.** `deja` discovers it by walking up from
+the path you point it at (just like git finds `.git`), so it works from any
+subdirectory.
+
+```toml
+# .dejafunc.toml — all keys optional
+
+[index]
+# Extra globs to skip, layered on top of .gitignore and the built-in skip list
+# (.git, .venv, node_modules, …). gitignore glob syntax (**, trailing / for dirs).
+exclude = ["**/generated/**", "vendor/**"]
+# Re-admit specific files an exclude above dropped (include beats the config
+# exclude — but never overrides .gitignore or the built-in skips).
+include = ["scripts/deploy.py"]
+
+[search]
+# Tune `deja find` ranking: multipliers on the per-signal scores. Any omitted
+# key keeps its built-in default, so you can nudge just one.
+weights = { name = 1.0, docstring = 0.6, signature = 0.4 }
+```
+
+**Precedence is CLI flag > `.dejafunc.toml` > built-in default.** The config only
+fills what you didn't pass on the command line. To ignore the file entirely for
+one run, add `--no-config`:
+
+```bash
+deja index --no-config          # build using defaults, ignore the config
+deja find slugify . --no-config # search without the config's weights
+```
+
+Notes:
+
+- Uses the stdlib `tomllib` (Python 3.11+). On 3.10 (no `tomllib`) the config is
+  skipped with a one-line note rather than failing — the 3.10 path still works.
+- Unknown tables/keys are ignored (forward-compatible); malformed TOML prints a
+  clear message and falls back to defaults instead of crashing.
+- `[index]` globs apply to `deja index` and the auto-build inside `deja find`;
+  `deja index --watch` keeps its own fast path and doesn't apply them yet.
+
 ## Use with AI agents
 
 The whole point of `deja-func` is to stop redundant code *before it's written* —

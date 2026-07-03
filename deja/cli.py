@@ -85,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="With --watch: quiet window after the last change before reindexing (default: 0.4).",
     )
+    index.add_argument(
+        "--no-config",
+        action="store_true",
+        help="Ignore any .dejafunc.toml (use built-in defaults / flags only).",
+    )
     index.set_defaults(func=cmd_index)
 
     find = subparsers.add_parser(
@@ -139,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="as_json",
         help="Emit structured JSON (stable schema) instead of pretty text.",
+    )
+    find.add_argument(
+        "--no-config",
+        action="store_true",
+        help="Ignore any .dejafunc.toml (use built-in defaults / flags only).",
     )
     find.set_defaults(func=cmd_find)
 
@@ -320,6 +330,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_project_config(root, *, no_config: bool):
+    """Load ``.dejafunc.toml`` for *root*, honoring ``--no-config`` (issue #25).
+
+    Returns an inert default :class:`~deja.config.Config` when ``--no-config`` is
+    set, when no file is found, or when the runtime lacks ``tomllib`` (py3.10).
+    On malformed TOML it prints a clear one-line note to stderr and *also* falls
+    back to defaults, so a bad config never crashes a command — it just doesn't
+    take effect (precedence: absent/ignored config → today's behavior).
+    """
+    from .config import Config, ConfigError, load_config
+
+    if no_config:
+        return Config()
+    try:
+        return load_config(root)
+    except ConfigError as exc:
+        print(f"\U0001f9ea deja: {exc}", file=sys.stderr)
+        return Config()
+
+
 def cmd_hello(_args: argparse.Namespace) -> int:
     """Handle `deja hello`."""
     print(HELLO_MESSAGE)
@@ -342,6 +372,10 @@ def cmd_index(args: argparse.Namespace) -> int:
         return 2
 
     if getattr(args, "watch", False):
+        # NOTE: the incremental watcher keeps its own snapshot/reindex path and
+        # does not yet apply .dejafunc.toml include/exclude (issue #25 scoped the
+        # config to one-shot `index`/`find`). A plain `deja index` re-run always
+        # honors the config; watch parity can follow in a later slice.
         from .watch import DEFAULT_DEBOUNCE, DEFAULT_INTERVAL, run_watch
 
         interval = args.interval if args.interval is not None else DEFAULT_INTERVAL
@@ -354,7 +388,8 @@ def cmd_index(args: argparse.Namespace) -> int:
             return 2
         return run_watch(root, interval=interval, debounce=debounce)
 
-    index = build_index(root)
+    config = _load_project_config(root, no_config=getattr(args, "no_config", False))
+    index = build_index(root, exclude=config.exclude, include=config.include)
     out = save_index(index, root)
     print(f"\U0001f9e0 Indexed {len(index)} functions \u2192 {out}")
     return 0
@@ -396,12 +431,14 @@ def cmd_find(args: argparse.Namespace) -> int:
         print(f"deja: not a directory: {root}", file=sys.stderr)
         return 2
 
+    config = _load_project_config(root, no_config=getattr(args, "no_config", False))
+
     try:
         index = load_index(root)
     except FileNotFoundError:
         # No index yet: build one on the fly so first-run is friction-free.
         print("\U0001f50e No index yet \u2014 building one first\u2026", file=sys.stderr)
-        index = build_index(root)
+        index = build_index(root, exclude=config.exclude, include=config.include)
         save_index(index, root)
 
     limit = args.limit if args.limit is not None else DEFAULT_LIMIT
@@ -432,6 +469,7 @@ def cmd_find(args: argparse.Namespace) -> int:
             limit=limit,
             sig=sig,
             intent=args.intent,
+            weights=config.weights,
         )
 
     if getattr(args, "as_json", False):
