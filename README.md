@@ -424,8 +424,8 @@ deja find slugify . --no-config # search without the config's weights
 
 Notes:
 
-- Uses the stdlib `tomllib` (Python 3.11+). On 3.10 (no `tomllib`) the config is
-  skipped with a one-line note rather than failing — the 3.10 path still works.
+- Uses the stdlib `tomllib` (Python 3.11+), or the tiny `tomli` backport on
+  3.10 — so the config parses identically on every supported Python.
 - Unknown tables/keys are ignored (forward-compatible); malformed TOML prints a
   clear message and falls back to defaults instead of crashing.
 - `[index]` globs apply to `deja index` and the auto-build inside `deja find`;

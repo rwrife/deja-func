@@ -14,9 +14,10 @@ Design goals (issue #25):
   "was a flag passed?" decision; this module just supplies config values.)
 * **Forward-compatible.** Unknown tables/keys are ignored rather than fatal, in
   the same spirit as :meth:`FunctionRecord.from_dict`.
-* **No new runtime dependency.** Parsing uses the stdlib ``tomllib`` (Python
-  3.11+). On 3.10, where ``tomllib`` is absent, we degrade gracefully (skip the
-  config with a one-line note) rather than hard-failing the 3.10 CI job.
+* **No new *core-behavior* dependency.** Parsing uses the stdlib ``tomllib``
+  (Python 3.11+). On 3.10, where ``tomllib`` is absent, we fall back to the
+  tiny ``tomli`` backport (tomllib's own upstream, pinned in ``pyproject.toml``
+  for ``python_version < '3.11'``) so config parses identically everywhere.
 
 Supported keys (v1 — intentionally tight)::
 
@@ -38,10 +39,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-try:  # tomllib is stdlib on 3.11+; absent on 3.10 (see module docstring).
+try:  # tomllib is stdlib on 3.11+; on 3.10 use the tomli backport (see docstring).
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - exercised only on py3.10
-    tomllib = None  # type: ignore[assignment]
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:  # pragma: no cover - neither present (unpinned env)
+        tomllib = None  # type: ignore[assignment]
 
 #: Filename we look for, walking up from the search root (like git's ``.git``).
 CONFIG_FILENAME = ".dejafunc.toml"
@@ -162,9 +166,11 @@ def _parse_data(data: dict, *, source: Path | None) -> Config:
 def load_config(start: str | Path) -> Config:
     """Discover and parse ``.dejafunc.toml`` at/above *start*.
 
-    Returns an inert default :class:`Config` when no file is found, when the
-    Python runtime lacks ``tomllib`` (3.10), or when the file is empty. Raises
-    :class:`ConfigError` only on genuinely malformed TOML or wrong-typed keys.
+    Returns an inert default :class:`Config` when no file is found or when the
+    file is empty. Raises :class:`ConfigError` only on genuinely malformed TOML
+    or wrong-typed keys. TOML parsing uses stdlib ``tomllib`` (3.11+) or the
+    pinned ``tomli`` backport (3.10), so behavior is identical across supported
+    Pythons.
 
     Args:
         start: File or directory to begin the ancestor search from (typically
@@ -177,11 +183,14 @@ def load_config(start: str | Path) -> Config:
     if path is None:
         return Config()
 
-    if tomllib is None:  # pragma: no cover - only on py3.10 without tomllib
-        # Graceful 3.10 path: don't hard-fail, just fall back to defaults. The
-        # caller surfaces a one-line note so the skip is visible, not silent.
+    if tomllib is None:  # pragma: no cover - only if the tomli backport is missing
+        # Defensive: py3.10 pins `tomli` in pyproject, so this branch is
+        # unreachable in a correctly-installed env. If someone strips the
+        # backport, don't hard-crash the command -- surface a clear note and
+        # fall back to defaults (caller downgrades ConfigError to a one-liner).
         raise ConfigError(
-            f"found {path.name} but this Python lacks 'tomllib' (needs 3.11+); ignoring config"
+            f"found {path.name} but no TOML parser is available "
+            f"(install 'tomli' on Python < 3.11); ignoring config"
         )
 
     try:
