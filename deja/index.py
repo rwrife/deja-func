@@ -64,16 +64,30 @@ def index_path(root: str | os.PathLike[str]) -> Path:
     return Path(root) / INDEX_DIR / INDEX_FILE
 
 
-def build_index(root: str | os.PathLike[str]) -> Index:
+def build_index(
+    root: str | os.PathLike[str],
+    *,
+    exclude=(),
+    include=(),
+) -> Index:
     """Walk *root*, parse every supported file, and return an :class:`Index`.
 
     Files that fail to read or parse are skipped silently (a parser returns
     ``[]`` on syntax errors), so one bad file never aborts the whole run.
+
+    Args:
+        root: Directory to index.
+        exclude: Extra exclude globs (``.dejafunc.toml`` ``[index].exclude``,
+            issue #25) layered on the gitignore / skip-dir rules.
+        include: Include globs (``[index].include``) that re-admit a
+            config-excluded file. Both are forwarded to
+            :func:`~deja.walker.iter_source_files`; empty tuples preserve the
+            exact pre-config behavior.
     """
     root_path = Path(root)
     records: list[FunctionRecord] = []
 
-    for rel_path in iter_source_files(root_path):
+    for rel_path in iter_source_files(root_path, exclude=exclude, include=include):
         parser = get_parser_for_path(rel_path)
         if parser is None:  # pragma: no cover - walker already filtered these
             continue

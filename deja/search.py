@@ -40,6 +40,38 @@ _INTENT_DOC_WEIGHT = 1.1
 #: How much a supplied ``--sig`` shape contributes when blended with text signals.
 _SIG_WEIGHT = 1.0
 
+#: A per-signal weight override (``.dejafunc.toml`` ``[search].weights``): a
+#: :class:`~deja.config.SearchWeights` or any object exposing ``name`` /
+#: ``docstring`` / ``signature`` attributes (each a float or ``None``). ``None``
+#: on the alias itself means "no overrides" (use built-in / intent defaults).
+WeightOverrides = object  # documented shape; kept loose to avoid an import cycle.
+
+
+def _resolve_weights(*, intent: bool, weights: object = None) -> tuple[float, float, float]:
+    """Return the effective ``(name, docstring, signature)`` weights.
+
+    Starts from the built-in defaults (or the ``--intent`` variants) and lets a
+    config override replace any component it names. An unset component (``None``)
+    keeps the default, so a partial ``[search].weights`` only nudges the signals
+    it mentions — and CLI/mode choices like ``--intent`` still set the baseline
+    the config layers onto (precedence: explicit weight > default).
+    """
+    name_w, doc_w = (
+        (_INTENT_NAME_WEIGHT, _INTENT_DOC_WEIGHT) if intent else (_NAME_WEIGHT, _DOC_WEIGHT)
+    )
+    sig_w = _SIG_WEIGHT
+    if weights is not None:
+        over_name = getattr(weights, "name", None)
+        over_doc = getattr(weights, "docstring", None)
+        over_sig = getattr(weights, "signature", None)
+        if over_name is not None:
+            name_w = float(over_name)
+        if over_doc is not None:
+            doc_w = float(over_doc)
+        if over_sig is not None:
+            sig_w = float(over_sig)
+    return name_w, doc_w, sig_w
+
 
 @dataclass(frozen=True, slots=True)
 class ScoreBreakdown:
@@ -103,6 +135,7 @@ def score_record(
     *,
     sig: SignatureShape | None = None,
     intent: bool = False,
+    weights: object = None,
 ) -> tuple[float, ScoreBreakdown]:
     """Return the blended relevance score (0-100) of *record* and its breakdown.
 
@@ -114,15 +147,17 @@ def score_record(
             blended in and reported.
         intent: When true, weight the docstring above the name (natural-language
             "what does it do" queries).
+        weights: Optional per-signal weight overrides (``.dejafunc.toml``
+            ``[search].weights``, issue #25). Any component left unset falls back
+            to the built-in (or ``--intent``) default, so a partial override only
+            touches the signals it names.
 
     Returns:
         ``(score, breakdown)`` where *score* is the max of the weighted signals
         (so any single strong signal can surface a result) and *breakdown*
         records each applicable raw component.
     """
-    name_w, doc_w = (
-        (_INTENT_NAME_WEIGHT, _INTENT_DOC_WEIGHT) if intent else (_NAME_WEIGHT, _DOC_WEIGHT)
-    )
+    name_w, doc_w, sig_w = _resolve_weights(intent=intent, weights=weights)
 
     name_raw: float | None = None
     doc_raw: float | None = None
@@ -140,7 +175,7 @@ def score_record(
     if sig is not None:
         cand_shape = parse_signature(record.signature)
         sig_raw = shape_score(sig, cand_shape)
-        weighted.append(sig_raw * _SIG_WEIGHT)
+        weighted.append(sig_raw * sig_w)
     score = max(weighted) if weighted else 0.0
     breakdown = ScoreBreakdown(name=name_raw, docstring=doc_raw, signature=sig_raw)
     return min(score, 100.0), breakdown
@@ -154,6 +189,7 @@ def search(
     min_score: float = MIN_SCORE,
     sig: str | SignatureShape | None = None,
     intent: bool = False,
+    weights: object = None,
 ) -> list[ScoredRecord]:
     """Rank *records* against *query* (and optional signature shape), best first.
 
@@ -167,6 +203,9 @@ def search(
             an already-parsed :class:`~deja.sigshape.SignatureShape`. Blended in
             when present (M4).
         intent: Weight docstrings above names for natural-language queries.
+        weights: Optional per-signal weight overrides from ``.dejafunc.toml``
+            (issue #25). Forwarded to :func:`score_record`; unset components keep
+            the built-in/intent default.
 
     Returns:
         Up to *limit* :class:`ScoredRecord` s sorted by score (desc). Ties break
@@ -188,7 +227,7 @@ def search(
 
     scored: list[ScoredRecord] = []
     for r in records:
-        score, breakdown = score_record(q, r, sig=shape, intent=intent)
+        score, breakdown = score_record(q, r, sig=shape, intent=intent, weights=weights)
         scored.append(ScoredRecord(record=r, score=score, breakdown=breakdown))
 
     scored = [s for s in scored if s.score >= min_score]
