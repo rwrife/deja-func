@@ -16,6 +16,9 @@ language breakdown, the most-duplicated names, and the biggest files.
 `deja stale` (PLAN.md §8 #9) is the complement to `find`: it lists dead-code
 candidates — indexed functions whose names are never referenced anywhere else
 in the same tree (a fast string-level heuristic, not a call graph).
+`deja export` / `deja import` (PLAN.md §8 #12) make the index portable: export
+writes a checked-in-able JSON so an agent on a *fresh clone* can `deja import`
+the inventory instantly instead of paying for a cold `deja index`.
 Later commands arrive in subsequent milestones — see PLAN.md §7.
 """
 
@@ -256,6 +259,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON (stable schema) instead of pretty text.",
     )
     stale.set_defaults(func=cmd_stale)
+
+    export = subparsers.add_parser(
+        "export",
+        help="Write the index to a portable file for fresh clones / agents to import.",
+    )
+    export.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repo root whose index to export (default: current directory).",
+    )
+    export.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        metavar="FILE",
+        help="Destination file (default: deja-index.json). Use '-' to stream "
+        "JSON to stdout (pipe-safe; notes go to stderr).",
+    )
+    export.add_argument(
+        "--no-config",
+        action="store_true",
+        help="Ignore any .dejafunc.toml when auto-building an index first.",
+    )
+    export.set_defaults(func=cmd_export)
+
+    imp = subparsers.add_parser(
+        "import",
+        help="Load a portable export into .dejafunc/index.json (no `deja index` needed).",
+    )
+    imp.add_argument(
+        "file",
+        help="Portable export file to import (as produced by `deja export`).",
+    )
+    imp.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repo root to hydrate the index for (default: current directory).",
+    )
+    imp.set_defaults(func=cmd_import)
 
     hook = subparsers.add_parser(
         "hook",
@@ -667,6 +711,94 @@ def cmd_stale(args: argparse.Namespace) -> int:
 
     print(format_stale(report))
     return 0 if not report.is_empty else 1
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Handle `deja export`: write the index to a portable file (PLAN.md §8 #12).
+
+    Loads the target repo's index (auto-building it first if none exists, exactly
+    like ``deja find`` so a fresh checkout exports cleanly), then writes a
+    portable JSON document — the on-disk index shape plus ``exported_at`` and an
+    optional ``root_name``. With ``-o -`` it streams that JSON to **stdout** and
+    keeps stdout pipe-clean (the only chatter — the auto-build note and the
+    success line — goes to stderr), so ``deja export -o - | ...`` is safe.
+    """
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .export import DEFAULT_EXPORT_FILE, export_index, write_export
+    from .index import build_index, load_index, save_index
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    try:
+        index = load_index(root)
+    except FileNotFoundError:
+        # No index yet: build one on the fly so first-run / fresh-clone just works
+        # (mirrors `deja find`). The note goes to stderr so `-o -` stays clean.
+        print("\U0001f50e No index yet \u2014 building one first\u2026", file=sys.stderr)
+        config = _load_project_config(root, no_config=getattr(args, "no_config", False))
+        index = build_index(root, exclude=config.exclude, include=config.include)
+        save_index(index, root)
+
+    root_name = root.resolve().name or None
+    output = args.output
+
+    if output == "-":
+        # stdout mode: only the JSON goes to stdout; the confirmation is stderr.
+        sys.stdout.write(export_index(index, root_name=root_name))
+        print(
+            f"\U0001f4e6 Exported {len(index)} functions to stdout.",
+            file=sys.stderr,
+        )
+        return 0
+
+    if output is not None:
+        # Explicit -o FILE is taken as given (relative to the CWD, like any tool).
+        out_path = Path(output)
+    else:
+        # Default lands at the *repo root* so `deja-index.json` sits alongside the
+        # code it describes (ready to check in), regardless of the CWD.
+        out_path = root / DEFAULT_EXPORT_FILE
+    written = write_export(index, out_path, root_name=root_name)
+    print(f"\U0001f4e6 Exported {len(index)} functions \u2192 {written}")
+    print("   Check it in so a fresh clone can `deja import` it (skip the cold index run).")
+    return 0
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    """Handle `deja import`: hydrate `.dejafunc/index.json` from a portable export.
+
+    Reads a file produced by ``deja export`` and writes it to the target repo's
+    ``.dejafunc/index.json`` so a subsequent ``deja find`` returns results with
+    **no** prior ``deja index`` run. ``schema_version`` is validated first: an
+    incompatible/newer version is a clean, non-crashing error (exit 2), matching
+    the forward-compat tone of the config/index loaders.
+    """
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .export import ExportError, read_export
+    from .index import save_index
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    try:
+        index = read_export(args.file)
+    except FileNotFoundError as exc:
+        print(f"deja: {exc}", file=sys.stderr)
+        return 2
+    except ExportError as exc:
+        # Schema mismatch or malformed JSON: a clear line, never a traceback.
+        print(f"\U0001f9ea deja: {exc}", file=sys.stderr)
+        return 2
+
+    out = save_index(index, root)
+    print(f"\U0001f4e5 Imported {len(index)} functions \u2192 {out}")
+    print("   `deja find <query>` now works here without running `deja index` first.")
+    return 0
 
 
 def cmd_hook_install(args: argparse.Namespace) -> int:

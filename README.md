@@ -62,6 +62,11 @@ finder that lists indexed functions whose names are never referenced anywhere
 else in the tree. It's a fast, conservative string-level heuristic (not a call
 graph), so results are *candidates* to review, not proof. See
 [Find dead-code candidates](#find-dead-code-candidates-deja-stale).
+**`deja export` / `deja import` shipped:** the index is now **portable** —
+export a checked-in-able `deja-index.json` and let an agent on a *fresh clone*
+`deja import` it (or `deja find` immediately) instead of paying for a cold
+`deja index`. Round-trips are lossless and schema-validated. See
+[Export / import the index](#export--import-the-index-deja-export--deja-import).
 
 ## Install (from source)
 
@@ -341,6 +346,48 @@ covers every file, so a helper called only from another language isn't flagged.
 Like the other commands it auto-builds the index on first run, and exits `0`
 when any candidate is found / `1` when nothing is stale (scriptable / CI-
 friendly).
+
+### Export / import the index (`deja export` / `deja import`)
+
+The index lives in `.dejafunc/index.json`, which is (rightly) gitignored and
+rebuilt per-machine. That means an AI agent on a **fresh clone** has to run a
+full `deja index` before it can ask *"have I written this?"* — cold-start
+friction exactly when the lookup is most valuable. `deja export` / `deja import`
+make the inventory **portable** so a repo can publish a checked-in index (or an
+agent can hydrate one in a single command):
+
+```bash
+deja export                   # write deja-index.json (the whole inventory)
+deja export path/to/project   # ...export a specific repo
+deja export -o inventory.json # ...to a custom file
+# → 📦 Exported 412 functions → deja-index.json
+```
+
+On a **fresh clone**, skip the cold index run — hydrate straight from the file:
+
+```bash
+deja import deja-index.json   # populate .dejafunc/index.json from the export
+deja find slugify             # ...and find works immediately, no `deja index`
+# → 📥 Imported 412 functions → .dejafunc/index.json
+```
+
+The export **is** the on-disk index shape (`schema_version`, `tool_version`,
+`count`, `functions[]`) plus an `exported_at` UTC timestamp and the source
+`root_name`, so a round-trip is lossless: `export` then `import` reconstructs
+records byte-identical to a native `deja index`. On import, `schema_version` is
+validated first — a file from a newer, incompatible build fails with a clear
+message (and a non-zero exit) instead of importing a shape deja can't read.
+
+For agents and pipelines, `-o -` streams the JSON to **stdout** while keeping it
+pipe-clean (the confirmation line goes to stderr):
+
+```bash
+deja export -o - | jq '.count'          # 412
+deja export -o - > shared/deja-index.json
+```
+
+A handy pattern: check `deja-index.json` into the repo and refresh it in CI (or a
+`pre-push` step) so every clone — human or agent — starts with a warm inventory.
 
 ### Warn on duplicates as you commit (`deja hook`)
 
