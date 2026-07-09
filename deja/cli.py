@@ -16,6 +16,9 @@ language breakdown, the most-duplicated names, and the biggest files.
 `deja stale` (PLAN.md §8 #9) is the complement to `find`: it lists dead-code
 candidates — indexed functions whose names are never referenced anywhere else
 in the same tree (a fast string-level heuristic, not a call graph).
+`deja explain <name>` (PLAN.md §8 #6) closes the loop after `find`: it shows one
+function's definition, a textual caller list, and a git "last touched" age so you
+know whether it's safe to reuse and who depends on it.
 `deja export` / `deja import` (PLAN.md §8 #12) make the index portable: export
 writes a checked-in-able JSON so an agent on a *fresh clone* can `deja import`
 the inventory instantly instead of paying for a cold `deja index`.
@@ -259,6 +262,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON (stable schema) instead of pretty text.",
     )
     stale.set_defaults(func=cmd_stale)
+
+    explain = subparsers.add_parser(
+        "explain",
+        help="Explain a function: where it's defined, who calls it, and how stale it is.",
+    )
+    explain.add_argument(
+        "name",
+        help="Function name to explain, e.g. 'slugify' (fuzzy if no exact match).",
+    )
+    explain.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repo root to search (default: current directory).",
+    )
+    explain.add_argument(
+        "--max-callers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Cap the caller list shown (default: 20); the rest summarize as "
+        "'+K more'. JSON always carries the full list. 0 = no cap.",
+    )
+    explain.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit structured JSON (stable schema) instead of pretty text.",
+    )
+    explain.set_defaults(func=cmd_explain)
 
     export = subparsers.add_parser(
         "export",
@@ -711,6 +744,101 @@ def cmd_stale(args: argparse.Namespace) -> int:
 
     print(format_stale(report))
     return 0 if not report.is_empty else 1
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    """Handle `deja explain <name>`: definition, callers, and staleness (PLAN.md §8 #6).
+
+    Loads the target repo's index (auto-building it first if none exists, exactly
+    like ``deja find``/``deja stale`` so first-run just works), resolves *name*
+    against it (exact, else fuzzy), then reports the definition (file:line,
+    signature, docstring), a textual caller list scanned over the same files
+    ``deja index`` parsed, and a git "last touched" relative age.
+
+    Exit codes are scriptable: ``0`` for a single resolved function, ``2`` for an
+    ambiguous name (candidate list printed to stdout, prompting disambiguation),
+    and ``1`` for an unknown name (friendly miss, matching ``deja find``).
+    """
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .explain import DEFAULT_MAX_CALLERS, Ambiguous, explain, git_last_touched
+    from .index import build_index, load_index, save_index
+    from .render import (
+        format_ambiguous,
+        format_explain_miss,
+        format_explanation,
+    )
+    from .walker import iter_source_files
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    max_callers = args.max_callers if args.max_callers is not None else DEFAULT_MAX_CALLERS
+
+    try:
+        index = load_index(root)
+    except FileNotFoundError:
+        # No index yet: build one on the fly so first-run is friction-free
+        # (mirrors `deja find` / `deja stale`).
+        print("\U0001f50e No index yet — building one first…", file=sys.stderr)
+        index = build_index(root)
+        save_index(index, root)
+
+    # Read source relative to the repo root, matching how `build_index` reads it.
+    root_path = Path(root).resolve()
+
+    def read_source(rel: str) -> str | None:
+        try:
+            return (root_path / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+    # Staleness reader: shell out to git for the file's "last touched" age,
+    # degrading to None (age line omitted) outside a git repo or for a deleted
+    # file. Bound to this repo root so it works regardless of the CWD.
+    def last_touched(rel: str) -> str | None:
+        return git_last_touched(root_path, rel)
+
+    # Scan exactly the files `deja index` would parse (same gitignore/skip rules).
+    files = iter_source_files(root_path)
+
+    result = explain(
+        args.name,
+        index.records,
+        files,
+        read_source,
+        last_touched=last_touched,
+        max_callers=max_callers,
+    )
+
+    if getattr(args, "as_json", False):
+        # Machine-readable path: stable schema, no ANSI, no personality.
+        import json as _json
+
+        from .serialize import (
+            ambiguous_to_dict,
+            explain_miss_to_dict,
+            explanation_to_dict,
+        )
+
+        if result is None:
+            print(_json.dumps(explain_miss_to_dict(args.name), indent=2, ensure_ascii=False))
+            return 1
+        if isinstance(result, Ambiguous):
+            print(_json.dumps(ambiguous_to_dict(result), indent=2, ensure_ascii=False))
+            return 2
+        print(_json.dumps(explanation_to_dict(result), indent=2, ensure_ascii=False))
+        return 0
+
+    if result is None:
+        print(format_explain_miss(args.name))
+        return 1
+    if isinstance(result, Ambiguous):
+        print(format_ambiguous(result))
+        return 2
+    print(format_explanation(result))
+    return 0
 
 
 def cmd_export(args: argparse.Namespace) -> int:
