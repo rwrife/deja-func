@@ -109,6 +109,24 @@ where each ``<record>`` is the function shape below *without* the search-only
       ]
     }
 
+``deja explain --json`` (PLAN.md §8 #6) emits a sibling document defined here.
+An *unknown* name yields ``{"schema_version": 1, "query": "...",
+"resolution": "unknown"}``; an *ambiguous* name yields ``"resolution":
+"ambiguous"`` plus a ``candidates`` list of bare records; a resolved name::
+
+    {
+      "schema_version": 1,
+      "query": "slugify",
+      "resolution": "exact",     # or "fuzzy" when matched by fallback ranking
+      "definition": <record>,     # the bare function shape (file/line/sig/doc)
+      "last_touched": "3 months ago",  # git %cr, or null outside git / deleted
+      "caller_total": 3,          # full count (may exceed len(callers) if capped)
+      "callers": [
+        {"file": "src/blog.py", "line": 12, "text": "slug = slugify(title)"},
+        ...
+      ]
+    }
+
 Keeping rendering (``render.py``) and serialization (here) separate means the
 terminal output and the machine output can evolve independently, and the schema
 is trivial for an agent to consume.
@@ -120,6 +138,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .dupes import Cluster
+from .explain import Ambiguous, Caller, Explanation
 from .hook import Match
 from .parsers import FunctionRecord
 from .search import ScoredRecord
@@ -328,4 +347,61 @@ def matches_to_dict(
         "strict": bool(strict),
         "count": len(items),
         "matches": items,
+    }
+
+
+def caller_to_dict(caller: Caller) -> dict[str, Any]:
+    """Serialize one :class:`~deja.explain.Caller` (a textual call site)."""
+    return {
+        "file": caller.file,
+        "line": caller.line,
+        "text": caller.text,
+    }
+
+
+def explanation_to_dict(explanation: Explanation) -> dict[str, Any]:
+    """Build the top-level resolved ``explain`` document (see module docstring).
+
+    Args:
+        explanation: A fully-populated result from :func:`deja.explain.explain`.
+
+    Returns:
+        A JSON-serializable dict with a stable, documented schema. ``resolution``
+        is ``"fuzzy"`` when the name matched only via the fuzzy fallback, else
+        ``"exact"``. ``caller_total`` is the *full* count even when the display
+        list was capped, so agents never lose the true number.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "query": explanation.query,
+        "resolution": "fuzzy" if explanation.fuzzy else "exact",
+        "definition": record_to_dict(explanation.record),
+        "last_touched": explanation.last_touched,
+        "caller_total": explanation.caller_total,
+        "callers": [caller_to_dict(c) for c in explanation.callers],
+    }
+
+
+def ambiguous_to_dict(ambiguous: Ambiguous) -> dict[str, Any]:
+    """Build the ``explain`` document for an ambiguous name (see module docstring).
+
+    ``resolution`` is ``"ambiguous"``; ``candidates`` are the bare records the
+    user must disambiguate between, best-ranked first.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "query": ambiguous.query,
+        "resolution": "ambiguous",
+        "fuzzy": bool(ambiguous.fuzzy),
+        "count": len(ambiguous.candidates),
+        "candidates": [record_to_dict(r) for r in ambiguous.candidates],
+    }
+
+
+def explain_miss_to_dict(query: str) -> dict[str, Any]:
+    """Build the ``explain`` document for an unknown name (see module docstring)."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "query": query,
+        "resolution": "unknown",
     }

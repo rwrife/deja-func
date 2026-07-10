@@ -18,6 +18,7 @@ import sys
 from collections.abc import Iterable
 
 from .dupes import Cluster
+from .explain import Ambiguous, Explanation
 from .hook import Match
 from .search import ScoredRecord
 from .stale import StaleReport
@@ -368,3 +369,165 @@ def format_stale(
         lines.append(_style(caveat, _DIM, color=color))
 
     return "\n".join(lines)
+
+
+def _explain_caller_caveat(*, color: bool) -> str:
+    """The shared heuristic caveat for the caller list (mirrors ``stale``)."""
+    return _style(
+        "\U0001f9ea Heuristic: textual `name(` scan, not a call graph \u2014 dynamic "
+        "dispatch can hide or invent call sites.",
+        _DIM,
+        color=color,
+    )
+
+
+def format_explanation(
+    explanation: Explanation,
+    *,
+    color: bool | None = None,
+    stream=None,
+) -> str:
+    """Render a resolved :class:`~deja.explain.Explanation` into printable text.
+
+    Output::
+
+        \U0001f4cd slugify \u2014 src/text.py:42 \u2014 (value: str) -> str
+            Turn a string into a URL-safe slug.
+        \U0001f552 last touched 3 months ago
+        \U0001f465 3 callers:
+            src/blog.py:12    slug = slugify(title)
+            src/api.py:88     return slugify(name)
+            \u2026 +1 more
+        \U0001f9ea Heuristic: textual `name(` scan, not a call graph \u2026
+
+    A *fuzzy* resolution (no exact index match) is announced first so the reader
+    knows deja guessed. The age line and the "+K more" summary are omitted when
+    not applicable.
+
+    Args:
+        explanation: A fully-populated result from :func:`deja.explain.explain`.
+        color: Force ANSI on/off; ``None`` auto-detects from *stream*.
+        stream: Stream used for TTY detection when *color* is ``None``
+            (defaults to ``sys.stdout``).
+
+    Returns:
+        A newline-joined string ready to ``print``.
+    """
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+
+    r = explanation.record
+    lines: list[str] = []
+
+    if explanation.fuzzy:
+        # No exact match: be honest that this is a best-guess resolution.
+        q = explanation.query or r.name
+        lines.append(
+            _style(
+                f"\U0001f914 No exact match for {q!r} \u2014 closest is:",
+                _BOLD,
+                color=color,
+            )
+        )
+
+    loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
+    name = _style(r.qualname or r.name, _BOLD, color=color)
+    sig = r.signature or "()"
+    lines.append(f"\U0001f4cd {name} \u2014 {loc} \u2014 {sig}")
+    if r.docstring:
+        lines.append(_style(f"    {r.docstring}", _DIM, color=color))
+
+    # Staleness: only when git could resolve an age (skipped outside git / for a
+    # deleted or untracked file), tying into the dead-code/stale theme.
+    if explanation.last_touched:
+        lines.append(
+            _style(f"\U0001f552 last touched {explanation.last_touched}", _DIM, color=color)
+        )
+
+    total = explanation.caller_total
+    if total == 0:
+        lines.append(
+            _style(
+                "\U0001f465 No callers found \u2014 nothing in the tree calls it (a stale/"
+                "dead-code hint).",
+                _MAGENTA,
+                color=color,
+            )
+        )
+        return "\n".join(lines)
+
+    noun = "caller" if total == 1 else "callers"
+    lines.append(_style(f"\U0001f465 {total} {noun}:", _BOLD, color=color))
+    for c in explanation.callers:
+        c_loc = _style(f"{c.file}:{c.line}", _CYAN, color=color)
+        snippet = f"    {c.text}" if c.text else ""
+        lines.append(f"    {c_loc}{snippet}")
+
+    hidden = total - len(explanation.callers)
+    if hidden > 0:
+        lines.append(_style(f"    \u2026 +{hidden} more", _DIM, color=color))
+
+    lines.append(_explain_caller_caveat(color=color))
+    return "\n".join(lines)
+
+
+def format_ambiguous(
+    ambiguous: Ambiguous,
+    *,
+    color: bool | None = None,
+    stream=None,
+) -> str:
+    """Render an :class:`~deja.explain.Ambiguous` disambiguation prompt.
+
+    Output::
+
+        \U0001f914 'parse' matches 3 functions \u2014 which one?
+            parse \u2014 src/a.py:10 \u2014 (s: str) -> Node
+            parse \u2014 src/b.py:22 \u2014 (raw: bytes) -> Node
+            \u2026
+        Narrow it down with a file:line or a more specific qualname.
+
+    Args:
+        ambiguous: The ambiguous resolution from :func:`deja.explain.explain`.
+        color: Force ANSI on/off; ``None`` auto-detects from *stream*.
+        stream: Stream used for TTY detection when *color* is ``None``.
+
+    Returns:
+        A newline-joined string ready to ``print``.
+    """
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+
+    n = len(ambiguous.candidates)
+    kind = "looks like" if ambiguous.fuzzy else "matches"
+    lead = f"\U0001f914 {ambiguous.query!r} {kind} {n} functions \u2014 which one?"
+    lines = [_style(lead, _BOLD, color=color)]
+    for r in ambiguous.candidates:
+        loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
+        name = _style(r.qualname or r.name, _BOLD, color=color)
+        sig = r.signature or "()"
+        lines.append(f"    {name} \u2014 {loc} \u2014 {sig}")
+    lines.append(
+        _style(
+            "  Narrow it down with a more specific qualname (e.g. Class.method).",
+            _DIM,
+            color=color,
+        )
+    )
+    return "\n".join(lines)
+
+
+def format_explain_miss(name: str, *, color: bool | None = None, stream=None) -> str:
+    """Render the friendly "not in the index" message for an unknown name.
+
+    Mirrors ``deja find``'s miss personality so a lookup that finds nothing reads
+    consistently across commands.
+    """
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+    return _style(
+        f"\U0001f937 {name!r} isn't in the index \u2014 run `deja index` if it's new, "
+        "or check the spelling.",
+        _BOLD,
+        color=color,
+    )

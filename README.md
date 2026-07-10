@@ -62,6 +62,12 @@ finder that lists indexed functions whose names are never referenced anywhere
 else in the tree. It's a fast, conservative string-level heuristic (not a call
 graph), so results are *candidates* to review, not proof. See
 [Find dead-code candidates](#find-dead-code-candidates-deja-stale).
+**`deja explain` shipped:** the loop-closer after `find` — given a function name
+it shows the **definition** (file:line, signature, docstring), a **caller list**
+(a lightweight `name(` scan over the indexed files), and a git **"last touched"**
+age so you know whether it's safe to reuse and who depends on it. Fuzzy-resolves
+and disambiguates like `find`. See
+[Explain a function](#explain-a-function-deja-explain).
 **`deja export` / `deja import` shipped:** the index is now **portable** —
 export a checked-in-able `deja-index.json` and let an agent on a *fresh clone*
 `deja import` it (or `deja find` immediately) instead of paying for a cold
@@ -346,6 +352,59 @@ covers every file, so a helper called only from another language isn't flagged.
 Like the other commands it auto-builds the index on first run, and exits `0`
 when any candidate is found / `1` when nothing is stale (scriptable / CI-
 friendly).
+
+### Explain a function (`deja explain`)
+
+`deja find` answers *"does this exist?"* — but once you've found `slugify`, the
+next question is *"is it safe to reuse, and who depends on it?"* `deja explain
+<name>` closes that loop straight off the index plus a cheap repo scan:
+
+```bash
+deja explain slugify                 # where it lives, who calls it, how stale it is
+deja explain slugify path/to/project # ...in a specific repo
+# 📍 slugify — src/text.py:42 — (value: str) -> str
+#     Turn a string into a URL-safe slug.
+# 🕒 last touched 3 months ago
+# 👥 3 callers:
+#     src/blog.py:12    slug = slugify(title)
+#     src/api.py:88     return slugify(name)
+#     … +1 more
+# 🧪 Heuristic: textual `name(` scan, not a call graph — dynamic dispatch can
+#    hide or invent call sites.
+```
+
+Resolution is forgiving: an **exact** name (or `Class.method` qualname) wins; if
+there's no exact hit it falls back to the same fuzzy ranking as `deja find` and
+tells you it guessed. A name with **several** definitions (an overloaded or
+re-declared function) prints the candidate list and exits non-zero so you — or an
+agent — can disambiguate with a more specific qualname:
+
+```bash
+deja explain parse
+# 🤔 'parse' matches 3 functions — which one?
+#     Parser.parse        — deja/parsers/base.py:62 — (self, source, rel_path)
+#     PythonParser.parse  — deja/parsers/python.py:108 — (self, source, rel_path)
+#     ...
+deja explain PythonParser.parse      # ← pick one
+```
+
+The **caller list** is the same string-level heuristic as `deja stale`: a
+word-boundary `name(` match over exactly the files `deja index` parsed, with the
+definition's own line excluded. It is *not* a call graph (that's an LSP, out of
+scope), so dynamic dispatch and reflection can hide — or occasionally invent — a
+call site. Cap the list with `--max-callers` (default `20`; the rest summarize as
+`+K more`), and reach for `--json` when an agent should consume it:
+
+```bash
+deja explain slugify --max-callers 5      # trim the displayed caller list
+deja explain slugify --json | jq '.caller_total'   # full count, even if capped
+```
+
+The **"last touched"** age comes from `git log -1 --format=%cr` on the defining
+file, tying into the same stale/dead-code theme. Outside a git repo (or for a
+file deleted since indexing) the age line is simply omitted — everything else
+still prints. Exit codes are scriptable: `0` for a single resolved function, `2`
+for an ambiguous name, and `1` for an unknown one (matching `deja find`'s miss).
 
 ### Export / import the index (`deja export` / `deja import`)
 
