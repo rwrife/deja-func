@@ -63,6 +63,53 @@ def _explain_line(s: ScoredRecord) -> str:
     return f"{base}  ({detail})" if detail else base
 
 
+def format_why(
+    query: str,
+    results: Iterable[ScoredRecord],
+    *,
+    color: bool | None = None,
+    stream=None,
+) -> str:
+    """Render a per-signal *why-did-this-rank* breakdown for ``deja why``.
+
+    For each match, list every applicable signal with its raw 0-100 score, the
+    effective weight it was multiplied by (from ``.dejafunc.toml`` or the
+    built-in / ``--intent`` defaults), and the resulting weighted contribution.
+    The blended ``total`` is the ``max`` of those weighted values, so the
+    winning signal (listed first) shows exactly *why* the match ranked where it
+    did (issue #35).
+    """
+    results = list(results)
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+
+    if not results:
+        return _style(
+            f'\U0001f914 Nothing matched “{query}” — no ranking to explain.',
+            _BOLD,
+            color=color,
+        )
+
+    n = len(results)
+    noun = "match" if n == 1 else "matches"
+    lines = [_style(f'\U0001f50d Why these {n} {noun} ranked for “{query}”:', _BOLD, color=color)]
+    for s in results:
+        r = s.record
+        loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
+        name = _style(r.qualname or r.name, _BOLD, color=color)
+        total = _style(f"total {s.score:.1f}", _BOLD, color=color)
+        lines.append(f"  {name} — {loc} — {total}")
+        rows = s.breakdown.weighted_parts()
+        if not rows:
+            lines.append(_style("      (no per-signal scores available)", _DIM, color=color))
+            continue
+        for i, (label, raw, weight, weighted) in enumerate(rows):
+            marker = "★" if i == 0 else " "
+            detail = f"{marker} {label:<4} {raw:5.1f} × {weight:.2f} = {weighted:5.1f}"
+            lines.append(_style(f"      {detail}", _DIM, color=color))
+    return "\n".join(lines)
+
+
 def format_results(
     query: str,
     results: Iterable[ScoredRecord],

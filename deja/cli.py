@@ -293,6 +293,55 @@ def build_parser() -> argparse.ArgumentParser:
     )
     explain.set_defaults(func=cmd_explain)
 
+    why = subparsers.add_parser(
+        "why",
+        help="Explain WHY matches ranked: per-signal score + weight breakdown.",
+    )
+    why.add_argument(
+        "query",
+        nargs="?",
+        default="",
+        help="What you're about to (re)write, e.g. 'slugify'. Optional with --sig.",
+    )
+    why.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repo root to search (default: current directory).",
+    )
+    why.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of matches to explain (default: 10).",
+    )
+    why.add_argument(
+        "-s",
+        "--sig",
+        default=None,
+        metavar="SHAPE",
+        help="Match by signature shape, e.g. '(str)->bool' or '(int, int)'.",
+    )
+    why.add_argument(
+        "-i",
+        "--intent",
+        action="store_true",
+        help="Weight the docstring higher for natural-language intent queries.",
+    )
+    why.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit the structured breakdown (with a 'scores' object) as JSON.",
+    )
+    why.add_argument(
+        "--no-config",
+        action="store_true",
+        help="Ignore any .dejafunc.toml (use built-in defaults / flags only).",
+    )
+    why.set_defaults(func=cmd_why)
+
     export = subparsers.add_parser(
         "export",
         help="Write the index to a portable file for fresh clones / agents to import.",
@@ -564,6 +613,73 @@ def cmd_find(args: argparse.Namespace) -> int:
     # Header still reads naturally when only a shape was given.
     header_query = query if query.strip() else (sig or "")
     print(format_results(header_query, results, explain=args.explain))
+    return 0 if results else 1
+
+
+def cmd_why(args: argparse.Namespace) -> int:
+    """Handle `deja why <query>`: explain WHY each match ranked (issue #35).
+
+    Runs the same fuzzy/shape ranking as ``deja find`` but presents the *score
+    breakdown* front-and-center: each applicable signal (name / doc / sig) with
+    its raw 0-100 score, the effective weight it was multiplied by (honoring
+    ``.dejafunc.toml`` ``[search].weights`` when present), and the resulting
+    weighted contribution. The blended total is the ``max`` of those weighted
+    values, so the winning signal makes the ranking basis inspectable — exactly
+    what agents deciding *reuse vs write new* need. ``--json`` emits the stable
+    ``scores`` object for CI/agent consumption. Exit code mirrors ``find`` (0
+    when there's at least one match, 1 when none) so it stays scriptable.
+    """
+    from .index import build_index, load_index, save_index
+    from .render import format_why
+    from .search import DEFAULT_LIMIT, search
+
+    query = args.query or ""
+    sig = args.sig
+
+    # Same lone-positional-is-a-path disambiguation as ``deja find``.
+    if sig and query and args.path == "." and Path(query).is_dir():
+        args.path = query
+        query = ""
+
+    if not query.strip() and not sig:
+        print("deja: provide a search query or --sig SHAPE", file=sys.stderr)
+        return 2
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"deja: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    config = _load_project_config(root, no_config=getattr(args, "no_config", False))
+
+    try:
+        index = load_index(root)
+    except FileNotFoundError:
+        print("\U0001f50e No index yet — building one first…", file=sys.stderr)
+        index = build_index(root, exclude=config.exclude, include=config.include)
+        save_index(index, root)
+
+    limit = args.limit if args.limit is not None else DEFAULT_LIMIT
+    results = search(
+        query,
+        index.records,
+        limit=limit,
+        sig=sig,
+        intent=args.intent,
+        weights=config.weights,
+    )
+
+    if getattr(args, "as_json", False):
+        import json as _json
+
+        from .serialize import results_to_dict
+
+        doc = results_to_dict(results, query=query, sig=sig, intent=args.intent)
+        print(_json.dumps(doc, indent=2, ensure_ascii=False))
+        return 0 if results else 1
+
+    header_query = query if query.strip() else (sig or "")
+    print(format_why(header_query, results))
     return 0 if results else 1
 
 
