@@ -18,7 +18,7 @@ near-duplicates — "the agent has no memory of the module you refactored." `dej
 ## Status
 
 🚧 Early days — see [`PLAN.md`](./PLAN.md) for the roadmap. v0.1 targets Python,
-with JavaScript/TypeScript now indexed too.
+with JavaScript/TypeScript and Go now indexed too.
 
 **M1 shipped:** the CLI installs and runs (`deja --version`, `deja hello`).
 **M2 shipped:** `deja index` walks the repo, parses every Python function/method
@@ -98,8 +98,8 @@ deja index path/to/project    # index a specific directory
 # → 🧠 Indexed 412 functions → .dejafunc/index.json
 ```
 
-`deja index` recursively scans for supported source files (Python and
-JavaScript/TypeScript today), extracts each function/method's name, signature,
+`deja index` recursively scans for supported source files (Python,
+JavaScript/TypeScript, and Go today), extracts each function/method's name, signature,
 docstring, and `file:line`, and saves them to a small, diffable JSON index. It
 respects your `.gitignore` and skips noise dirs (`.venv`, `node_modules`,
 `__pycache__`, …).
@@ -148,6 +148,20 @@ signature, e.g. `(email: string): boolean`. Adding a language is one parser
 module + one registry entry, so more are easy to slot in later. The scan is
 best-effort: anything it can't make sense of in a file is skipped rather than
 raising, so one odd file can never abort the whole index.
+
+### Multi-language: Go
+
+`.go` files are parsed by the same **dependency-free** approach (no
+tree-sitter). The scanner recognizes:
+
+- plain functions — `func Name(args) ret`
+- methods with a receiver — `func (r *Repo) Get(id string) (*Row, error)`
+  (the receiver type is folded into the qualified name, e.g. `Repo.Get`)
+- generic functions — `func Map[T any](s []T) []T`
+
+The godoc-style doc comment — the contiguous `//` block directly above the
+`func` — is captured as the docstring, and result signatures (single, tuple, or
+none) are preserved verbatim.
 
 ```bash
 deja find "validate email"    # fuzzy-search the index by name + docstring

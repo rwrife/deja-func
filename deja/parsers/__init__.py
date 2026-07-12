@@ -8,6 +8,7 @@ M5 adds JavaScript/TypeScript.
 from __future__ import annotations
 
 from .base import FunctionRecord, Parser
+from .go import GoParser
 from .javascript import JavaScriptParser
 from .python import PythonParser
 
@@ -16,6 +17,7 @@ __all__ = [
     "Parser",
     "PythonParser",
     "JavaScriptParser",
+    "GoParser",
     "get_parser_for_path",
 ]
 
@@ -29,6 +31,7 @@ _PARSERS_BY_EXT: dict[str, Parser] = {
     ".jsx": _JS_PARSER,
     ".ts": _JS_PARSER,
     ".tsx": _JS_PARSER,
+    ".go": GoParser(),
 }
 
 
