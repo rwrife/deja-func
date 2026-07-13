@@ -85,14 +85,14 @@ def format_why(
 
     if not results:
         return _style(
-            f'\U0001f914 Nothing matched “{query}” — no ranking to explain.',
+            f"\U0001f914 Nothing matched “{query}” — no ranking to explain.",
             _BOLD,
             color=color,
         )
 
     n = len(results)
     noun = "match" if n == 1 else "matches"
-    lines = [_style(f'\U0001f50d Why these {n} {noun} ranked for “{query}”:', _BOLD, color=color)]
+    lines = [_style(f"\U0001f50d Why these {n} {noun} ranked for “{query}”:", _BOLD, color=color)]
     for s in results:
         r = s.record
         loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
