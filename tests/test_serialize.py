@@ -48,6 +48,7 @@ def test_scored_to_dict_has_stable_keys() -> None:
         "lang",
         "score",
         "breakdown",
+        "scores",
     }
     assert d["name"] == "slugify"
     assert d["file"] == "src/text.py"

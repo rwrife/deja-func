@@ -211,6 +211,28 @@ deja find "validate" --sig "(str)->bool" --explain
 #         score 100  (name 100 · sig 100 · doc 88)
 ```
 
+### Explain the ranking (`deja why`)
+
+`--explain` gives a one-line summary; **`deja why <query>`** breaks it down
+signal-by-signal so you (or an agent deciding *reuse vs write new*) can see the
+basis of the score — each signal's raw 0-100 value, the weight it was multiplied
+by (honoring `.dejafunc.toml` `[search].weights`), and the weighted contribution.
+The blended `total` is the `max` of the weighted signals; the winning one is
+starred:
+
+```bash
+deja why slugify
+# → 🔍 Why these matches ranked for “slugify”:
+#     slugify — util.py:1 — total 100.0
+#       ★ name  100.0 × 1.00 = 100.0
+#         doc    88.0 × 0.90 =  79.2
+
+deja why "parse iso date" --json   # stable `scores` object for CI/agents
+```
+
+The `--json` output adds a `scores` object per match:
+`{"signals": {"name": {"raw", "weight", "weighted"}, ...}, "total": …}`.
+
 ### Semantic search (`deja find --semantic`)
 
 Fuzzy search matches *words*. Sometimes you know what you want but not what you

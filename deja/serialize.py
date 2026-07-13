@@ -163,6 +163,20 @@ def scored_to_dict(scored: ScoredRecord) -> dict[str, Any]:
         "doc": _round(scored.breakdown.docstring),
         "sig": _round(scored.breakdown.signature),
     }
+    # ``scores`` (issue #35, ``deja why``): per-signal raw score, the effective
+    # weight it was multiplied by, and the resulting weighted contribution, plus
+    # the blended ``total``. The winning signal's ``weighted`` equals ``total``
+    # (the blend is a ``max`` of the weighted signals). Additive to ``breakdown``
+    # so the existing schema stays back-compatible.
+    signals = {
+        label: {
+            "raw": _round(raw),
+            "weight": _round(weight),
+            "weighted": _round(weighted),
+        }
+        for label, raw, weight, weighted in scored.breakdown.weighted_parts()
+    }
+    scores = {"signals": signals, "total": _round(scored.score)}
     return {
         "name": r.name,
         "qualname": r.qualname or r.name,
@@ -173,6 +187,7 @@ def scored_to_dict(scored: ScoredRecord) -> dict[str, Any]:
         "lang": r.lang,
         "score": _round(scored.score),
         "breakdown": breakdown,
+        "scores": scores,
     }
 
 

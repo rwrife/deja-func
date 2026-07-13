@@ -75,16 +75,32 @@ def _resolve_weights(*, intent: bool, weights: object = None) -> tuple[float, fl
 
 @dataclass(frozen=True, slots=True)
 class ScoreBreakdown:
-    """Per-signal scores behind a result (surfaced by ``--explain``).
+    """Per-signal scores behind a result (surfaced by ``--explain`` / ``deja why``).
 
-    Each component is on the same 0-100 scale as the final blended score. A
+    Each raw component is on the same 0-100 scale as the final blended score. A
     component is ``None`` when that signal didn't apply (e.g. no ``--sig`` was
-    given, or the record has no docstring).
+    given, or the record has no docstring). The ``*_weight`` fields record the
+    *effective* weight each present signal was multiplied by (from
+    ``.dejafunc.toml`` ``[search].weights`` or the built-in / ``--intent``
+    defaults), so ``deja why`` can show precisely how each signal contributed to
+    the blended total. The blended ``score`` on :class:`ScoredRecord` is the
+    ``max`` of the weighted signals (any single strong signal can surface a
+    result), so the winning signal's ``raw * weight`` equals that total.
     """
 
     name: float | None = None
     docstring: float | None = None
     signature: float | None = None
+    name_weight: float | None = None
+    docstring_weight: float | None = None
+    signature_weight: float | None = None
+
+    def _weight_for(self, label: str) -> float | None:
+        return {
+            "name": self.name_weight,
+            "doc": self.docstring_weight,
+            "sig": self.signature_weight,
+        }.get(label)
 
     def parts(self) -> list[tuple[str, float]]:
         """Return the applicable ``(label, score)`` pairs, best first."""
@@ -96,6 +112,21 @@ class ScoreBreakdown:
         present = [(label, val) for label, val in raw if val is not None]
         present.sort(key=lambda p: -p[1])
         return present
+
+    def weighted_parts(self) -> list[tuple[str, float, float, float]]:
+        """Return ``(label, raw, weight, weighted)`` for present signals, best first.
+
+        ``weighted = raw * weight`` is the value that actually competed for the
+        blended ``max``. Sorted by ``weighted`` descending so the signal that
+        *won* the match is listed first — that's the "why" ``deja why`` explains.
+        """
+        rows: list[tuple[str, float, float, float]] = []
+        for label, raw in self.parts():
+            weight = self._weight_for(label)
+            w = 1.0 if weight is None else weight
+            rows.append((label, raw, w, raw * w))
+        rows.sort(key=lambda row: -row[3])
+        return rows
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +208,14 @@ def score_record(
         sig_raw = shape_score(sig, cand_shape)
         weighted.append(sig_raw * sig_w)
     score = max(weighted) if weighted else 0.0
-    breakdown = ScoreBreakdown(name=name_raw, docstring=doc_raw, signature=sig_raw)
+    breakdown = ScoreBreakdown(
+        name=name_raw,
+        docstring=doc_raw,
+        signature=sig_raw,
+        name_weight=name_w if name_raw is not None else None,
+        docstring_weight=doc_w if doc_raw is not None else None,
+        signature_weight=sig_w if sig_raw is not None else None,
+    )
     return min(score, 100.0), breakdown
 
 
