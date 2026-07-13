@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Iterable
 
+from .diff import DiffReport
 from .dupes import Cluster
 from .explain import Ambiguous, Explanation
 from .hook import Match
@@ -578,3 +579,83 @@ def format_explain_miss(name: str, *, color: bool | None = None, stream=None) ->
         _BOLD,
         color=color,
     )
+
+
+def _diff_header(report: DiffReport, *, color: bool) -> str:
+    """A personality-laden one-line verdict summarizing the inventory diff."""
+    if not report.any_changes:
+        return _style(
+            "\u2728 No function changes — the two indexes are identical.",
+            _BOLD,
+            color=color,
+        )
+    n_add = len(report.added)
+    n_rem = len(report.removed)
+    n_ren = len(report.renamed)
+    parts = []
+    if n_add:
+        parts.append(f"+{n_add} added")
+    if n_rem:
+        parts.append(f"-{n_rem} removed")
+    if n_ren:
+        parts.append(f"~{n_ren} renamed")
+    return _style("\U0001f504 Inventory diff: " + ", ".join(parts), _BOLD, color=color)
+
+
+def format_diff(
+    report: DiffReport,
+    *,
+    color: bool | None = None,
+    stream=None,
+) -> str:
+    """Render a two-snapshot :class:`~deja.diff.DiffReport` into printable text.
+
+    Output is grouped into ``+added`` / ``-removed`` / ``~renamed`` sections
+    (each omitted when empty)::
+
+        🔄 Inventory diff: +1 added, -1 removed, ~1 renamed
+          + name — file:line — signature
+          - name — file:line — signature
+          ~ old.name → new.name  (92% match)
+              old file:line → new file:line
+
+    Args:
+        report: The diff from :func:`deja.diff.diff_indexes`.
+        color: Force ANSI on/off; ``None`` auto-detects from *stream*.
+        stream: Stream used for TTY detection when *color* is ``None``
+            (defaults to ``sys.stdout``).
+
+    Returns:
+        A newline-joined string ready to ``print``.
+    """
+    if color is None:
+        color = _use_color(stream if stream is not None else sys.stdout)
+
+    lines = [_diff_header(report, color=color)]
+
+    for r in report.added:
+        loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
+        name = _style(r.qualname or r.name, _BOLD, color=color)
+        sig = r.signature or "()"
+        mark = _style("+", _BOLD, color=color)
+        lines.append(f"  {mark} {name} \u2014 {loc} \u2014 {sig}")
+
+    for r in report.removed:
+        loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
+        name = _style(r.qualname or r.name, _BOLD, color=color)
+        sig = r.signature or "()"
+        mark = _style("-", _DIM, color=color)
+        lines.append(f"  {mark} {name} \u2014 {loc} \u2014 {sig}")
+
+    for rn in report.renamed:
+        old_name = rn.old.qualname or rn.old.name
+        new_name = rn.new.qualname or rn.new.name
+        arrow = _style(f"{old_name} \u2192 {new_name}", _BOLD, color=color)
+        pct = _style(f"({rn.score:.0f}% match)", _DIM, color=color)
+        mark = _style("~", _MAGENTA, color=color)
+        lines.append(f"  {mark} {arrow}  {pct}")
+        old_loc = _style(f"{rn.old.file}:{rn.old.line}", _CYAN, color=color)
+        new_loc = _style(f"{rn.new.file}:{rn.new.line}", _CYAN, color=color)
+        lines.append(_style(f"      {old_loc} \u2192 {new_loc}", _DIM, color=color))
+
+    return "\n".join(lines)

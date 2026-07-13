@@ -137,6 +137,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from .diff import DiffReport, Rename
 from .dupes import Cluster
 from .explain import Ambiguous, Caller, Explanation
 from .hook import Match
@@ -326,6 +327,41 @@ def stale_function_to_dict(stale: StaleFunction) -> dict[str, Any]:
     return {
         "references": stale.references,
         "function": record_to_dict(stale.record),
+    }
+
+
+def rename_to_dict(rename: Rename) -> dict[str, Any]:
+    """Serialize one :class:`~deja.diff.Rename` (an old→new moved function)."""
+    return {
+        "score": _round(rename.score),
+        "old": record_to_dict(rename.old),
+        "new": record_to_dict(rename.new),
+    }
+
+
+def diff_to_dict(report: DiffReport) -> dict[str, Any]:
+    """Build the top-level ``diff`` result document (issue #36).
+
+    The shape mirrors the text view rendered by :func:`deja.render.format_diff`
+    (same added / removed / renamed sets, same ordering) so an agent consuming
+    JSON sees what a human would::
+
+        {
+          "schema_version": 1,
+          "unchanged": 42,          # functions matched by stable key in both
+          "added": [ <record>, ... ],   # only in the new snapshot
+          "removed": [ <record>, ... ], # only in the old snapshot
+          "renamed": [                   # same function moved/renamed
+            {"score": 92.0, "old": <record>, "new": <record>}, ...
+          ]
+        }
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "unchanged": report.unchanged,
+        "added": [record_to_dict(r) for r in report.added],
+        "removed": [record_to_dict(r) for r in report.removed],
+        "renamed": [rename_to_dict(rn) for rn in report.renamed],
     }
 
 

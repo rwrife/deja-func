@@ -22,6 +22,10 @@ know whether it's safe to reuse and who depends on it.
 `deja export` / `deja import` (PLAN.md §8 #12) make the index portable: export
 writes a checked-in-able JSON so an agent on a *fresh clone* can `deja import`
 the inventory instantly instead of paying for a cold `deja index`.
+`deja diff <old> <new>` (PLAN.md §8 #36) compares two index snapshots and
+reports functions added / removed / renamed — "git diff, but for your function
+inventory" — so a reviewer can see whether an agent PR quietly added a redundant
+function or moved/deleted one.
 Later commands arrive in subsequent milestones — see PLAN.md §7.
 """
 
@@ -382,6 +386,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repo root to hydrate the index for (default: current directory).",
     )
     imp.set_defaults(func=cmd_import)
+
+    diff = subparsers.add_parser(
+        "diff",
+        help="Compare two index snapshots: added / removed / renamed functions.",
+    )
+    diff.add_argument(
+        "old",
+        metavar="OLD",
+        help="Baseline index/export JSON (as produced by `deja export`).",
+    )
+    diff.add_argument(
+        "new",
+        metavar="NEW",
+        help="Newer index/export JSON to compare against the baseline.",
+    )
+    diff.add_argument(
+        "--rename-threshold",
+        type=float,
+        default=None,
+        metavar="PCT",
+        help="Signature+docstring similarity (0-100) needed to call a "
+        "remove+add a rename/move (default: 70).",
+    )
+    diff.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit machine-readable JSON (stable schema) instead of text.",
+    )
+    diff.set_defaults(func=cmd_diff)
 
     hook = subparsers.add_parser(
         "hook",
@@ -1043,6 +1077,51 @@ def cmd_import(args: argparse.Namespace) -> int:
     print(f"\U0001f4e5 Imported {len(index)} functions \u2192 {out}")
     print("   `deja find <query>` now works here without running `deja index` first.")
     return 0
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    """Handle `deja diff`: compare two index snapshots (issue #36).
+
+    Loads two index/export JSON files (the same portable shape ``deja export``
+    writes; a live ``.dejafunc/index.json`` also loads, since exports are a
+    superset), reports functions added / removed / renamed, and prints them.
+    Exit code is 1 when the snapshots differ and 0 when they're identical, so
+    it's scriptable / CI-friendly ("fail the check if the inventory changed").
+    """
+    # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
+    from .diff import RENAME_THRESHOLD, diff_indexes
+    from .export import ExportError, read_export
+    from .render import format_diff
+
+    threshold = args.rename_threshold if args.rename_threshold is not None else RENAME_THRESHOLD
+    if not 0.0 <= threshold <= 100.0:
+        print("deja: --rename-threshold must be between 0 and 100", file=sys.stderr)
+        return 2
+
+    snapshots = {}
+    for label, path in (("old", args.old), ("new", args.new)):
+        try:
+            snapshots[label] = read_export(path)
+        except FileNotFoundError as exc:
+            print(f"deja: {exc}", file=sys.stderr)
+            return 2
+        except ExportError as exc:
+            print(f"\U0001f9ea deja: {path}: {exc}", file=sys.stderr)
+            return 2
+
+    report = diff_indexes(snapshots["old"], snapshots["new"], rename_threshold=threshold)
+
+    if getattr(args, "as_json", False):
+        # Machine-readable path: stable schema, no ANSI, no personality.
+        import json as _json
+
+        from .serialize import diff_to_dict
+
+        print(_json.dumps(diff_to_dict(report), indent=2, ensure_ascii=False))
+        return 1 if report.any_changes else 0
+
+    print(format_diff(report))
+    return 1 if report.any_changes else 0
 
 
 def cmd_hook_install(args: argparse.Namespace) -> int:

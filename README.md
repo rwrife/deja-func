@@ -74,6 +74,13 @@ export a checked-in-able `deja-index.json` and let an agent on a *fresh clone*
 `deja index`. Round-trips are lossless and schema-validated. See
 [Export / import the index](#export--import-the-index-deja-export--deja-import).
 
+**`deja diff` shipped:** *git diff, but for your function inventory.* Compare
+two index snapshots and see functions **added**, **removed**, and likely
+**renamed/moved** (matched by signature shape + docstring, not name). Perfect
+for reviewing an agent-generated PR: did it quietly add a redundant function or
+move/delete one? `--json` for CI/agents; exits non-zero when the inventory
+changed. See [Diff two indexes](#diff-two-indexes-deja-diff).
+
 ## Install (from source)
 
 ```bash
@@ -483,6 +490,48 @@ deja export -o - > shared/deja-index.json
 
 A handy pattern: check `deja-index.json` into the repo and refresh it in CI (or a
 `pre-push` step) so every clone — human or agent — starts with a warm inventory.
+
+### Diff two indexes (`deja diff`)
+
+*git diff, but for your function inventory.* Give `deja diff` two index snapshots
+— an older baseline and a newer one — and it reports what changed: functions
+**added**, **removed**, and likely **renamed/moved**.
+
+```bash
+deja diff old.json new.json          # compare two exports (or live index.json files)
+deja export -o before.json           # snapshot before a change...
+# ...make edits, then:
+deja export -o after.json
+deja diff before.json after.json
+```
+
+Both arguments accept anything `deja export` writes (and a live
+`.dejafunc/index.json` too — exports are a superset). Output groups the change:
+
+```
+🔄 Inventory diff: +1 added, -1 removed, ~1 renamed
+  + brandnew — b.py:3 — ()
+  - gone — a.py:2 — ()
+  ~ parse_iso → from_iso  (100% match)
+      dates.py:1 → dates.py:1
+```
+
+Renames/moves are detected by **signature shape + docstring similarity**, *not*
+by name — the name is exactly what a rename changes — so a renamed or relocated
+function shows up as `~renamed` instead of a spurious remove + add. Tune the
+bar with `--rename-threshold PCT` (default 70).
+
+`deja diff` exits **1** when the snapshots differ and **0** when they're
+identical, so it drops straight into CI ("fail the check if the function
+inventory changed unexpectedly"). Add `--json` for a stable machine-readable
+document agents can consume:
+
+```bash
+deja diff before.json after.json --json
+```
+
+Use it to review an agent-generated PR: did it quietly add a redundant function,
+or move/delete one? The diff answers in a single command.
 
 ### Warn on duplicates as you commit (`deja hook`)
 
