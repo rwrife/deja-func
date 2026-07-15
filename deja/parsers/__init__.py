@@ -11,6 +11,7 @@ from .base import FunctionRecord, Parser
 from .go import GoParser
 from .javascript import JavaScriptParser
 from .python import PythonParser
+from .rust import RustParser
 
 __all__ = [
     "FunctionRecord",
@@ -18,6 +19,7 @@ __all__ = [
     "PythonParser",
     "JavaScriptParser",
     "GoParser",
+    "RustParser",
     "get_parser_for_path",
 ]
 
@@ -32,6 +34,7 @@ _PARSERS_BY_EXT: dict[str, Parser] = {
     ".ts": _JS_PARSER,
     ".tsx": _JS_PARSER,
     ".go": GoParser(),
+    ".rs": RustParser(),
 }
 
 

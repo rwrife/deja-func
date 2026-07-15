@@ -18,7 +18,7 @@ near-duplicates — "the agent has no memory of the module you refactored." `dej
 ## Status
 
 🚧 Early days — see [`PLAN.md`](./PLAN.md) for the roadmap. v0.1 targets Python,
-with JavaScript/TypeScript and Go now indexed too.
+with JavaScript/TypeScript, Go, and Rust now indexed too.
 
 **M1 shipped:** the CLI installs and runs (`deja --version`, `deja hello`).
 **M2 shipped:** `deja index` walks the repo, parses every Python function/method
@@ -106,7 +106,7 @@ deja index path/to/project    # index a specific directory
 ```
 
 `deja index` recursively scans for supported source files (Python,
-JavaScript/TypeScript, and Go today), extracts each function/method's name, signature,
+JavaScript/TypeScript, Go, and Rust today), extracts each function/method's name, signature,
 docstring, and `file:line`, and saves them to a small, diffable JSON index. It
 respects your `.gitignore` and skips noise dirs (`.venv`, `node_modules`,
 `__pycache__`, …).
@@ -169,6 +169,22 @@ tree-sitter). The scanner recognizes:
 The godoc-style doc comment — the contiguous `//` block directly above the
 `func` — is captured as the docstring, and result signatures (single, tuple, or
 none) are preserved verbatim.
+
+### Multi-language: Rust
+
+`.rs` files are parsed by the same **dependency-free** approach (no
+tree-sitter). The scanner recognizes:
+
+- free functions — `fn name(args) -> T`, including `pub fn`, `async fn`,
+  `const fn`, and generic `fn foo<T>(...)`
+- associated functions & methods inside `impl` blocks — the impl type is folded
+  into the qualified name, e.g. `Repo.get` (for `impl Trait for Type`, the
+  *Type* is the owner)
+- trait method signatures — both defaulted and bodyless declarations
+
+Rustdoc-style doc comments — the contiguous `///` (outer) or `//!` (inner) block
+directly above the `fn` — are captured as the docstring, and `-> T` return types
+(generics and tuples included) are preserved verbatim.
 
 ```bash
 deja find "validate email"    # fuzzy-search the index by name + docstring
