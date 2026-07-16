@@ -323,3 +323,80 @@ def test_cli_find_json_echoes_sig(tmp_path: Path, capsys: pytest.CaptureFixture)
     assert rc == 0
     doc = json.loads(captured.out)
     assert doc["sig"] == "(str)->str"
+
+
+# -- --age flag (issue #41) ------------------------------------------------
+
+
+class _FakeAge:
+    """Minimal GitAge stand-in for format_results(ages=...) tests."""
+
+    def __init__(self, relative: str) -> None:
+        self.relative = relative
+
+
+def test_format_results_ages_adds_relative_suffix() -> None:
+    r = _rec("slugify", file="strings.py", line=2, sig="(text: str) -> str")
+    out = format_results(
+        "slugify",
+        [ScoredRecord(record=r, score=100.0)],
+        color=False,
+        ages={"strings.py": _FakeAge("3 weeks ago")},
+    )
+    assert "strings.py:2 · 3 weeks ago" in out
+
+
+def test_format_results_ages_absent_file_no_suffix() -> None:
+    r = _rec("slugify", file="strings.py", line=2)
+    out = format_results(
+        "slugify",
+        [ScoredRecord(record=r, score=100.0)],
+        color=False,
+        ages={"strings.py": None},  # unavailable → no suffix
+    )
+    assert "· " not in out
+
+
+def _git_sample_repo(root: Path) -> None:
+    import subprocess
+
+    _sample_repo(root)
+
+    def g(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)
+
+    g("init")
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "Tester")
+    g("add", "-A")
+    g("commit", "-m", "initial")
+
+
+def test_cli_find_age_shows_column(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    _git_sample_repo(tmp_path)
+    rc = main(["find", "slugify", str(tmp_path), "--age"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "ago" in out
+
+
+def test_cli_find_age_json_attaches_last_touched(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    _git_sample_repo(tmp_path)
+    rc = main(["find", "slugify", str(tmp_path), "--age", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    doc = json.loads(out)
+    top = doc["results"][0]
+    assert top["last_touched"] is not None
+    assert "ago" in top["last_touched"]["relative"]
+    assert top["last_touched"]["short_hash"]
+
+
+def test_cli_find_no_age_flag_omits_column(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    _git_sample_repo(tmp_path)
+    rc = main(["find", "slugify", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "ago" not in out

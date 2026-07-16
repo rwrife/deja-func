@@ -117,6 +117,7 @@ def format_results(
     *,
     color: bool | None = None,
     explain: bool = False,
+    ages: dict[str, object] | None = None,
     stream=None,
 ) -> str:
     """Render *results* into a printable block of text.
@@ -127,6 +128,11 @@ def format_results(
         color: Force ANSI on/off; ``None`` auto-detects from *stream*.
         explain: When true, append a per-signal score breakdown under each match
             (the ``--explain`` flag, M4).
+        ages: Optional ``{record.file: GitAge}`` map for the ``--age`` flag; when
+            given, each match with a known age gets a dim ``· <relative>``
+            suffix on its location line. Files absent from the map (or mapped to
+            ``None``) simply get no age (non-git / untracked). Off by default so
+            the standard ``deja find`` output and cost are unchanged.
         stream: Stream used for TTY detection when *color* is ``None``
             (defaults to ``sys.stdout``).
 
@@ -141,6 +147,10 @@ def format_results(
     for s in results:
         r = s.record
         loc = _style(f"{r.file}:{r.line}", _CYAN, color=color)
+        if ages is not None:
+            age = ages.get(r.file)
+            if age is not None:
+                loc += _style(f" · {age.relative}", _DIM, color=color)
         name = _style(r.qualname or r.name, _BOLD, color=color)
         sig = r.signature or "()"
         lines.append(f"  {name} — {loc} — {sig}")
@@ -487,9 +497,17 @@ def format_explanation(
 
     # Staleness: only when git could resolve an age (skipped outside git / for a
     # deleted or untracked file), tying into the dead-code/stale theme.
-    if explanation.last_touched:
+    if explanation.last_touched_meta is not None:
         lines.append(
-            _style(f"\U0001f552 last touched {explanation.last_touched}", _DIM, color=color)
+            _style(
+                f"\U0001f552 Last touched: {explanation.last_touched_meta.summary()}",
+                _DIM,
+                color=color,
+            )
+        )
+    elif explanation.last_touched:
+        lines.append(
+            _style(f"\U0001f552 Last touched: {explanation.last_touched}", _DIM, color=color)
         )
 
     total = explanation.caller_total

@@ -241,6 +241,39 @@ def test_explain_last_touched_none_when_reader_absent() -> None:
     assert result.last_touched is None
 
 
+def test_explain_git_age_reader_populates_meta_and_relative() -> None:
+    from deja.gitmeta import GitAge
+
+    rec = _rec("f", file="f.py", line=1)
+    meta = GitAge(relative="3 months ago", iso_date="2026-04-01", short_hash="a1b2c3d")
+    result = explain(
+        "f",
+        [rec],
+        ["f.py"],
+        _reader({"f.py": "def f():\n    pass\n"}),
+        git_age=lambda rel: meta if rel == "f.py" else None,
+    )
+    assert isinstance(result, Explanation)
+    assert result.last_touched == "3 months ago"  # derived from meta
+    assert result.last_touched_meta is meta
+
+
+def test_format_explanation_shows_full_last_touched_line() -> None:
+    from deja.gitmeta import GitAge
+
+    rec = _rec("slugify", file="src/text.py", line=42, sig="(v: str) -> str", doc="Make a slug.")
+    result = Explanation(
+        record=rec,
+        callers=(),
+        caller_total=0,
+        last_touched="2 days ago",
+        last_touched_meta=GitAge("2 days ago", "2026-07-14", "cafef00"),
+        query="slugify",
+    )
+    out = format_explanation(result, color=False)
+    assert "Last touched: 2 days ago (2026-07-14, cafef00)" in out
+
+
 def test_explain_ambiguous_short_circuits_without_scanning() -> None:
     records = [_rec("parse", file="a.py", line=1), _rec("parse", file="b.py", line=1)]
 
@@ -271,7 +304,7 @@ def test_format_explanation_plain_text() -> None:
     out = format_explanation(result, color=False)
     assert "slugify — src/text.py:42 — (v: str) -> str" in out
     assert "Make a slug." in out
-    assert "last touched 2 days ago" in out
+    assert "Last touched: 2 days ago" in out
     # Zero callers reads as a dead-code hint.
     assert "No callers found" in out
 
@@ -456,6 +489,11 @@ def test_cli_explain_shows_git_last_touched(tmp_path: Path, capsys: pytest.Captu
     # Committed file → git %cr yields a non-null relative age.
     assert doc["last_touched"] is not None
     assert "ago" in doc["last_touched"]
+    # Rich detail carries the ISO date + short hash too (issue #41).
+    assert doc["last_touched_detail"] is not None
+    assert doc["last_touched_detail"]["relative"] == doc["last_touched"]
+    assert len(doc["last_touched_detail"]["iso_date"].split("-")) == 3
+    assert doc["last_touched_detail"]["short_hash"]
 
 
 def test_cli_explain_non_git_omits_age(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
@@ -465,6 +503,7 @@ def test_cli_explain_non_git_omits_age(tmp_path: Path, capsys: pytest.CaptureFix
     assert rc == 0
     doc = json.loads(out)
     assert doc["last_touched"] is None
+    assert doc["last_touched_detail"] is None
 
 
 def test_cli_explain_max_callers_caps_display(

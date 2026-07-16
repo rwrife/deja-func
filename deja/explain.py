@@ -34,6 +34,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .gitmeta import GitAge
 from .parsers import FunctionRecord
 from .search import search
 
@@ -51,6 +52,13 @@ SourceReader = Callable[[str], "str | None"]
 #: (not a git repo, file untracked/deleted, or git missing) — the renderer then
 #: simply omits the age line. Injected so tests don't shell out to git.
 AgeReader = Callable[[str], "str | None"]
+
+#: A callable ``(rel_path) -> GitAge | None`` for a file's full "last touched"
+#: metadata (relative age + ISO date + short hash). ``None`` means unavailable
+#: (non-git / untracked / deleted / git missing). Preferred over :data:`AgeReader`
+#: — when supplied it feeds both the rich ``last_touched_meta`` and the legacy
+#: ``last_touched`` string. Injected so tests don't shell out to git.
+GitAgeReader = Callable[[str], "GitAge | None"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +88,11 @@ class Explanation:
             ``max_callers`` cap trimmed the list for display).
         last_touched: Human relative age of the defining file (``"3 months
             ago"``), or ``None`` when unavailable (non-git / deleted / untracked).
+        last_touched_meta: Full git "last touched" facts (relative age + ISO date
+            + short hash) for the defining file, or ``None`` when unavailable.
+            Present alongside ``last_touched`` (which mirrors its relative age)
+            so JSON consumers get the date/hash while the plain string field
+            stays back-compatible.
         fuzzy: True when ``<name>`` had no exact index match and this record was
             the top *fuzzy* hit — surfaced so the report can say "did you mean".
         query: The original name the user asked about (echoed in output).
@@ -89,6 +102,7 @@ class Explanation:
     callers: tuple[Caller, ...] = field(default_factory=tuple)
     caller_total: int = 0
     last_touched: str | None = None
+    last_touched_meta: GitAge | None = None
     fuzzy: bool = False
     query: str = ""
 
@@ -259,6 +273,7 @@ def explain(
     read_source: SourceReader,
     *,
     last_touched: AgeReader | None = None,
+    git_age: GitAgeReader | None = None,
     max_callers: int = DEFAULT_MAX_CALLERS,
     fuzzy_limit: int = 5,
 ) -> Explanation | Ambiguous | None:
@@ -277,8 +292,13 @@ def explain(
             identical to what ``deja index`` parsed.
         read_source: ``(rel) -> text | None`` reader for the caller scan.
         last_touched: Optional ``(rel) -> age | None`` reader for the "last
-            touched" line. When ``None``, the age is simply omitted (e.g. the CLI
-            skips it outside a git repo). Injectable so tests stay disk/git-free.
+            touched" line (relative age only). When ``None``, the age is simply
+            omitted (e.g. the CLI skips it outside a git repo). Injectable so
+            tests stay disk/git-free. Ignored when *git_age* is supplied.
+        git_age: Optional ``(rel) -> GitAge | None`` reader for the *full* "last
+            touched" facts (relative age + ISO date + short hash). Preferred over
+            *last_touched*: when given it populates ``last_touched_meta`` and
+            derives ``last_touched`` from its relative age.
         max_callers: Cap on how many caller sites the :class:`Explanation`
             carries for display; ``caller_total`` still reflects the full count so
             the renderer can show "+K more" and JSON can report the true total.
@@ -298,13 +318,19 @@ def explain(
     total = len(all_callers)
     shown = all_callers if max_callers <= 0 else all_callers[:max_callers]
 
-    age = last_touched(record.file) if last_touched is not None else None
+    if git_age is not None:
+        meta = git_age(record.file)
+        age = meta.relative if meta is not None else None
+    else:
+        meta = None
+        age = last_touched(record.file) if last_touched is not None else None
 
     return Explanation(
         record=record,
         callers=tuple(shown),
         caller_total=total,
         last_touched=age,
+        last_touched_meta=meta,
         fuzzy=resolved.fuzzy,
         query=resolved.query,
     )

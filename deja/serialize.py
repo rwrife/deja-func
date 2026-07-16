@@ -120,6 +120,11 @@ An *unknown* name yields ``{"schema_version": 1, "query": "...",
       "resolution": "exact",     # or "fuzzy" when matched by fallback ranking
       "definition": <record>,     # the bare function shape (file/line/sig/doc)
       "last_touched": "3 months ago",  # git %cr, or null outside git / deleted
+      "last_touched_detail": {         # or null; full git "last touched" facts
+        "relative": "3 months ago",   # %cr
+        "iso_date": "2026-04-01",      # %cs
+        "short_hash": "a1b2c3d"        # %h
+      },
       "caller_total": 3,          # full count (may exceed len(callers) if capped)
       "callers": [
         {"file": "src/blog.py", "line": 12, "text": "slug = slugify(title)"},
@@ -428,6 +433,15 @@ def explanation_to_dict(explanation: Explanation) -> dict[str, Any]:
         "resolution": "fuzzy" if explanation.fuzzy else "exact",
         "definition": record_to_dict(explanation.record),
         "last_touched": explanation.last_touched,
+        "last_touched_detail": (
+            {
+                "relative": explanation.last_touched_meta.relative,
+                "iso_date": explanation.last_touched_meta.iso_date,
+                "short_hash": explanation.last_touched_meta.short_hash,
+            }
+            if explanation.last_touched_meta is not None
+            else None
+        ),
         "caller_total": explanation.caller_total,
         "callers": [caller_to_dict(c) for c in explanation.callers],
     }
