@@ -118,6 +118,7 @@ def format_results(
     color: bool | None = None,
     explain: bool = False,
     ages: dict[str, object] | None = None,
+    packages: dict[int, str] | None = None,
     stream=None,
 ) -> str:
     """Render *results* into a printable block of text.
@@ -133,6 +134,10 @@ def format_results(
             suffix on its location line. Files absent from the map (or mapped to
             ``None``) simply get no age (non-git / untracked). Off by default so
             the standard ``deja find`` output and cost are unchanged.
+        packages: Optional ``{id(ScoredRecord): label}`` map (monorepo mode,
+            issue #42); when given, each match is prefixed with its dim
+            ``[<package>]`` label so a merged multi-root view stays legible.
+            Off by default so single-root output is unchanged.
         stream: Stream used for TTY detection when *color* is ``None``
             (defaults to ``sys.stdout``).
 
@@ -152,6 +157,10 @@ def format_results(
             if age is not None:
                 loc += _style(f" · {age.relative}", _DIM, color=color)
         name = _style(r.qualname or r.name, _BOLD, color=color)
+        if packages is not None:
+            label = packages.get(id(s))
+            if label:
+                name = _style(f"[{label}] ", _DIM, color=color) + name
         sig = r.signature or "()"
         lines.append(f"  {name} — {loc} — {sig}")
         if r.docstring:
