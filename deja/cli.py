@@ -156,6 +156,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON (stable schema) instead of pretty text.",
     )
     find.add_argument(
+        "--age",
+        action="store_true",
+        help="Add a git 'last touched' relative-age column to each result "
+        "(off by default; one cached git call per distinct file, no perf hit "
+        "when unset; blank outside a git repo).",
+    )
+    find.add_argument(
         "--no-config",
         action="store_true",
         help="Ignore any .dejafunc.toml (use built-in defaults / flags only).",
@@ -641,12 +648,36 @@ def cmd_find(args: argparse.Namespace) -> int:
         doc = results_to_dict(
             results, query=query, sig=sig, intent=args.intent, semantic=semantic_used
         )
+        if getattr(args, "age", False):
+            # Attach the git "last touched" facts per result (cached per file).
+            from .gitmeta import GitAgeCache
+
+            cache = GitAgeCache(str(Path(root).resolve()))
+            for entry, s in zip(doc.get("results", []), results, strict=True):
+                meta = cache.get(s.record.file)
+                entry["last_touched"] = (
+                    {
+                        "relative": meta.relative,
+                        "iso_date": meta.iso_date,
+                        "short_hash": meta.short_hash,
+                    }
+                    if meta is not None
+                    else None
+                )
         print(_json.dumps(doc, indent=2, ensure_ascii=False))
         return 0 if results else 1
 
     # Header still reads naturally when only a shape was given.
     header_query = query if query.strip() else (sig or "")
-    print(format_results(header_query, results, explain=args.explain))
+    ages = None
+    if getattr(args, "age", False):
+        # Build a {file: GitAge} map, one cached git call per distinct file, so a
+        # large result set never spawns one process per result (issue #41).
+        from .gitmeta import GitAgeCache
+
+        cache = GitAgeCache(str(Path(root).resolve()))
+        ages = {s.record.file: cache.get(s.record.file) for s in results}
+    print(format_results(header_query, results, explain=args.explain, ages=ages))
     return 0 if results else 1
 
 
@@ -910,7 +941,8 @@ def cmd_explain(args: argparse.Namespace) -> int:
     and ``1`` for an unknown name (friendly miss, matching ``deja find``).
     """
     # Imported lazily so `deja --version` / `deja hello` stay dependency-free.
-    from .explain import DEFAULT_MAX_CALLERS, Ambiguous, explain, git_last_touched
+    from .explain import DEFAULT_MAX_CALLERS, Ambiguous, explain
+    from .gitmeta import GitAgeCache
     from .index import build_index, load_index, save_index
     from .render import (
         format_ambiguous,
@@ -944,11 +976,13 @@ def cmd_explain(args: argparse.Namespace) -> int:
         except OSError:
             return None
 
-    # Staleness reader: shell out to git for the file's "last touched" age,
-    # degrading to None (age line omitted) outside a git repo or for a deleted
-    # file. Bound to this repo root so it works regardless of the CWD.
-    def last_touched(rel: str) -> str | None:
-        return git_last_touched(root_path, rel)
+    # Staleness reader: full git "last touched" facts (relative age + ISO date +
+    # short hash) via a per-file cached git call, degrading to None (age omitted)
+    # outside a git repo or for a deleted file. Bound to this repo root.
+    age_cache = GitAgeCache(str(root_path))
+
+    def git_age(rel: str):
+        return age_cache.get(rel)
 
     # Scan exactly the files `deja index` would parse (same gitignore/skip rules).
     files = iter_source_files(root_path)
@@ -958,7 +992,7 @@ def cmd_explain(args: argparse.Namespace) -> int:
         index.records,
         files,
         read_source,
-        last_touched=last_touched,
+        git_age=git_age,
         max_callers=max_callers,
     )
 

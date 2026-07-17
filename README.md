@@ -234,6 +234,22 @@ deja find "validate" --sig "(str)->bool" --explain
 #         score 100  (name 100 · sig 100 · doc 88)
 ```
 
+**How fresh is it?** Add `--age` for a git *"last touched"* relative-age column,
+so you can tell a function edited last week (trust it) from one untouched for two
+years (think twice). It's off by default and costs nothing when unset; when on,
+deja makes **one cached git call per distinct file**, never one per result, and
+leaves the column blank outside a git repo:
+
+```bash
+deja find slugify --age
+# → 🫠 You already wrote this:
+#     slugify — util.py:1 · 3 weeks ago — (value: str) -> str
+
+deja find slugify --age --json   # each result gains a last_touched object:
+#   "last_touched": { "relative": "3 weeks ago",
+#                     "iso_date": "2026-06-25", "short_hash": "a1b2c3d" }
+```
+
 ### Explain the ranking (`deja why`)
 
 `--explain` gives a one-line summary; **`deja why <query>`** breaks it down
@@ -423,7 +439,7 @@ deja explain slugify                 # where it lives, who calls it, how stale i
 deja explain slugify path/to/project # ...in a specific repo
 # 📍 slugify — src/text.py:42 — (value: str) -> str
 #     Turn a string into a URL-safe slug.
-# 🕒 last touched 3 months ago
+# 🕒 Last touched: 3 months ago (2026-04-01, a1b2c3d)
 # 👥 3 callers:
 #     src/blog.py:12    slug = slugify(title)
 #     src/api.py:88     return slugify(name)
@@ -459,8 +475,10 @@ deja explain slugify --max-callers 5      # trim the displayed caller list
 deja explain slugify --json | jq '.caller_total'   # full count, even if capped
 ```
 
-The **"last touched"** age comes from `git log -1 --format=%cr` on the defining
-file, tying into the same stale/dead-code theme. Outside a git repo (or for a
+The **"last touched"** line comes from a single `git log -1` on the defining
+file, reporting git's own relative age (`%cr`) alongside the ISO commit date
+(`%cs`) and short hash (`%h`) — tying into the same stale/dead-code theme, and
+mirrored by the `--age` column on `deja find`. Outside a git repo (or for a
 file deleted since indexing) the age line is simply omitted — everything else
 still prints. Exit codes are scriptable: `0` for a single resolved function, `2`
 for an ambiguous name, and `1` for an unknown one (matching `deja find`'s miss).
