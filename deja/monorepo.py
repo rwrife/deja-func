@@ -40,25 +40,12 @@ PACKAGE_MARKERS = (
 )
 
 
-def _skip_dirs() -> frozenset[str]:
-    """Directory names discovery never descends into (vendored / build noise).
-
-    Mirrors the walker's skip set so root auto-detection doesn't wander into
-    ``node_modules`` / ``.git`` / build output and surface junk package roots.
-    Falls back to a small built-in set if the walker exposes none.
-    """
-    try:
-        return frozenset(ALWAYS_SKIP_DIRS)
-    except Exception:  # pragma: no cover - defensive; walker always defines it
-        return frozenset({".git", "node_modules", ".dejafunc", "__pycache__"})
-
-
 def package_label(base: str | os.PathLike[str], root: str | os.PathLike[str]) -> str:
     """Return the package label for *root* relative to *base*.
 
     The base directory itself labels as ``"."``; every other root is its POSIX
-    relative path (e.g. ``packages/api``). Roots outside *base* fall back to the
-    root's own basename so a label is always non-empty and readable.
+    relative path (e.g. ``packages/api``). Roots outside *base* use their absolute
+    path so equally named sibling packages have distinct labels.
     """
     base_p = Path(base).resolve()
     root_p = Path(root).resolve()
@@ -67,7 +54,7 @@ def package_label(base: str | os.PathLike[str], root: str | os.PathLike[str]) ->
     try:
         return root_p.relative_to(base_p).as_posix()
     except ValueError:
-        return root_p.name
+        return root_p.as_posix()
 
 
 def discover_roots(base: str | os.PathLike[str]) -> list[Path]:
@@ -76,7 +63,7 @@ def discover_roots(base: str | os.PathLike[str]) -> list[Path]:
     A directory is a package root if it directly contains any of
     :data:`PACKAGE_MARKERS`. We descend into subdirectories even after finding a
     marker so nested packages (a monorepo whose root also has a ``pyproject.toml``)
-    are all found. Vendored / build dirs (:func:`_skip_dirs`) are pruned.
+    are all found. Vendored / build dirs from the source walker's skip set are pruned.
 
     Returns:
         Resolved directory paths, sorted for determinism. If *base* itself has no
@@ -84,7 +71,7 @@ def discover_roots(base: str | os.PathLike[str]) -> list[Path]:
         always get at least one root (single-root fallback, no regression).
     """
     base_p = Path(base).resolve()
-    skip = _skip_dirs()
+    skip = ALWAYS_SKIP_DIRS
     roots: list[Path] = []
 
     for dirpath, dirnames, filenames in os.walk(base_p):
@@ -148,9 +135,9 @@ def merged_search(
     Each root's index is loaded (or built on first use), searched independently
     with the shared :func:`deja.search.search` ranking, and its hits tagged with
     the package label. Results across all packages are then merged and re-ranked
-    globally, de-duplicating identical ``(package, file, line)`` records (the
+    globally, de-duplicating identical resolved source paths and lines (the
     same function reachable via overlapping roots) while keeping cross-package
-    near-dupes — the *same* file path in two different packages — visible, which
+    near-dupes in distinct files visible, which
     feeds naturally into ``deja dupes`` later.
 
     Args:
@@ -171,18 +158,17 @@ def merged_search(
     """
     base_p = Path(base).resolve()
     root_paths = [Path(r).resolve() for r in roots] if roots is not None else discover_roots(base_p)
+    # Prefer the most specific package when ancestor indexes contain the same file.
+    root_paths = sorted(set(root_paths), key=lambda p: (-len(p.parts), p.as_posix()))
 
     out = MergedSearch()
     merged: list[MergedResult] = []
-    seen: set[tuple[str, str, int]] = set()
+    seen: set[tuple[Path, int]] = set()
 
     for root in root_paths:
         label = package_label(base_p, root)
         out.roots[label] = root
-        try:
-            index, built = _load_or_build(root, exclude=exclude, include=include)
-        except FileNotFoundError:  # pragma: no cover - _load_or_build builds instead
-            continue
+        index, built = _load_or_build(root, exclude=exclude, include=include)
         if built:
             out.built.append(label)
 
@@ -199,7 +185,7 @@ def merged_search(
             weights=weights,
         )
         for s in hits:
-            key = (label, s.record.file, s.record.line)
+            key = ((root / s.record.file).resolve(), s.record.line)
             if key in seen:
                 continue
             seen.add(key)

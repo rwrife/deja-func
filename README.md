@@ -526,6 +526,13 @@ deja find slugify . --all
 Missing package indexes are built on the fly, so `deja find --all` works even
 before a `deja index --all`. The `--json` output gains a `"monorepo": true`
 flag, a top-level `"packages"` list, and a `"package"` label on each result.
+First-run builds honor each package's `.dejafunc.toml` (or `--no-config`).
+Overlapping roots show each source location only once, using the most specific
+package label; distinct files in different packages remain visible even when
+their relative paths match. Explicit roots outside the base use absolute-path
+labels to avoid collisions between equally named packages.
+Monorepo mode does not support `index --watch`, `find --semantic`, or
+`find --age`; combining these options reports an error instead of ignoring them.
 Single-root behavior is completely unchanged when neither `--all` nor `--root`
 is passed.
 

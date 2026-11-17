@@ -571,6 +571,9 @@ def cmd_index(args: argparse.Namespace) -> int:
         return 2
 
     if getattr(args, "watch", False):
+        if getattr(args, "roots", None) or getattr(args, "all_roots", False):
+            print("deja: --watch cannot be combined with --all or --root", file=sys.stderr)
+            return 2
         # NOTE: the incremental watcher keeps its own snapshot/reindex path and
         # does not yet apply .dejafunc.toml include/exclude (issue #25 scoped the
         # config to one-shot `index`/`find`). A plain `deja index` re-run always
@@ -635,20 +638,34 @@ def _find_merged(
     Loads (or builds) every discovered package index under *root*, ranks across
     all of them at once, and tags each hit with its package label. Honors the
     same ``--json`` / ``--explain`` output modes as single-root find. Semantic
-    search and ``--age`` are not (yet) part of merged mode and are ignored here.
+    search and ``--age`` are not (yet) part of merged mode and are rejected here.
     """
-    from .monorepo import merged_search
+    from .index import build_index, index_path, save_index
+    from .monorepo import discover_roots, merged_search, package_label
     from .render import format_results
     from .serialize import results_to_dict
 
+    if getattr(args, "semantic", False) or getattr(args, "age", False):
+        print("deja: --semantic and --age cannot be combined with --all or --root", file=sys.stderr)
+        return 2
+
     explicit = getattr(args, "roots", None)
-    roots = None
+    roots = discover_roots(root) if not explicit else [Path(r) for r in explicit]
     if explicit:
-        roots = [Path(r) for r in explicit]
         bad = [r for r in roots if not r.is_dir()]
         if bad:
             print(f"deja: not a directory: {bad[0]}", file=sys.stderr)
             return 2
+
+    for target in roots:
+        if not index_path(target).is_file():
+            tconfig = _load_project_config(target, no_config=getattr(args, "no_config", False))
+            index = build_index(target, exclude=tconfig.exclude, include=tconfig.include)
+            save_index(index, target)
+            label = package_label(root, target)
+            print(
+                f"\U0001f50e [{label}] no index yet \u2014 built one first\u2026", file=sys.stderr
+            )
 
     merged = merged_search(
         root,

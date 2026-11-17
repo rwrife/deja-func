@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from deja.cli import main
 from deja.index import index_path
 from deja.monorepo import discover_roots, merged_search, package_label
@@ -82,6 +84,30 @@ def test_merged_search_respects_limit(tmp_path: Path) -> None:
     assert len(merged.results) == 1
 
 
+def test_merged_search_deduplicates_overlapping_roots(tmp_path: Path) -> None:
+    _make_monorepo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='workspace'\n")
+    for roots in (None, [tmp_path, tmp_path / "pkg_a", tmp_path / "pkg_a"]):
+        merged = merged_search(tmp_path, "slugify", roots=roots)
+        paths = [(merged.roots[m.package] / m.scored.record.file).resolve() for m in merged.results]
+        assert len(paths) == len(set(paths)) == 2
+        assert next(m.package for m in merged.results if m.scored.record.file == "text.py") == (
+            "pkg_a"
+        )
+
+
+def test_merged_search_external_roots_have_distinct_labels(tmp_path: Path) -> None:
+    roots = [tmp_path / parent / "pkg" for parent in ("one", "two")]
+    for root in roots:
+        root.mkdir(parents=True)
+        (root / "text.py").write_text("def slugify(s):\n    return s\n")
+    base = tmp_path / "workspace"
+    base.mkdir()
+    merged = merged_search(base, "slugify", roots=roots)
+    assert len(merged.roots) == len(merged.results) == 2
+    assert len({m.package for m in merged.results}) == 2
+
+
 # -- CLI -------------------------------------------------------------------
 
 
@@ -141,3 +167,35 @@ def test_cli_find_all_no_match_exit_code(tmp_path: Path) -> None:
     main(["index", str(tmp_path), "--all"])
     rc = main(["find", "nonexistentfunc", str(tmp_path), "--all"])
     assert rc == 1
+
+
+def test_cli_find_all_build_uses_package_config(tmp_path: Path, capsys) -> None:
+    _make_monorepo(tmp_path)
+    (tmp_path / "pkg_a" / ".dejafunc.toml").write_text('[index]\nexclude = ["text.py"]\n')
+    assert main(["find", "slugify", str(tmp_path), "--all", "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert [r["package"] for r in doc["results"]] == ["pkg_b"]
+    assert main(["find", "slugify", str(tmp_path), "--all", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == doc
+
+
+def test_cli_find_all_no_config_applies_to_package_build(tmp_path: Path, capsys) -> None:
+    _make_monorepo(tmp_path)
+    (tmp_path / "pkg_a" / ".dejafunc.toml").write_text('[index]\nexclude = ["text.py"]\n')
+    assert main(["find", "slugify", str(tmp_path), "--all", "--json", "--no-config"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert sorted(r["package"] for r in doc["results"]) == ["pkg_a", "pkg_b"]
+
+
+@pytest.mark.parametrize("flag", ["--age", "--semantic"])
+@pytest.mark.parametrize("roots", [["--all"], ["--root", "."]])
+def test_cli_find_rejects_unsupported_merged_options(tmp_path: Path, capsys, flag, roots) -> None:
+    assert main(["find", "slugify", str(tmp_path), *roots, flag]) == 2
+    assert "cannot be combined" in capsys.readouterr().err
+    assert not index_path(tmp_path).exists()
+
+
+def test_cli_index_rejects_watch_with_multiple_roots(tmp_path: Path, capsys) -> None:
+    assert main(["index", str(tmp_path), "--all", "--watch"]) == 2
+    assert "--watch cannot be combined" in capsys.readouterr().err
+    assert not index_path(tmp_path).exists()
