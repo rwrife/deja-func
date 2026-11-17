@@ -100,6 +100,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignore any .dejafunc.toml (use built-in defaults / flags only).",
     )
+    index.add_argument(
+        "--root",
+        action="append",
+        default=None,
+        metavar="PATH",
+        dest="roots",
+        help="Monorepo mode: index this package root (repeatable). Each root gets "
+        "its own .dejafunc/index.json. Omit to index just <path>.",
+    )
+    index.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_roots",
+        help="Monorepo mode: auto-discover every package root under <path> "
+        "(dirs with pyproject.toml/package.json/go.mod/Cargo.toml) and index each.",
+    )
     index.set_defaults(func=cmd_index)
 
     find = subparsers.add_parser(
@@ -166,6 +182,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-config",
         action="store_true",
         help="Ignore any .dejafunc.toml (use built-in defaults / flags only).",
+    )
+    find.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_roots",
+        help="Monorepo mode: search every discovered package index under <path> "
+        "and tag each result with its package.",
+    )
+    find.add_argument(
+        "--root",
+        action="append",
+        default=None,
+        metavar="PATH",
+        dest="roots",
+        help="Monorepo mode: search this package root's index (repeatable). "
+        "Implies merged multi-root search.",
     )
     find.set_defaults(func=cmd_find)
 
@@ -539,6 +571,9 @@ def cmd_index(args: argparse.Namespace) -> int:
         return 2
 
     if getattr(args, "watch", False):
+        if getattr(args, "roots", None) or getattr(args, "all_roots", False):
+            print("deja: --watch cannot be combined with --all or --root", file=sys.stderr)
+            return 2
         # NOTE: the incremental watcher keeps its own snapshot/reindex path and
         # does not yet apply .dejafunc.toml include/exclude (issue #25 scoped the
         # config to one-shot `index`/`find`). A plain `deja index` re-run always
@@ -556,10 +591,114 @@ def cmd_index(args: argparse.Namespace) -> int:
         return run_watch(root, interval=interval, debounce=debounce)
 
     config = _load_project_config(root, no_config=getattr(args, "no_config", False))
+
+    # Monorepo mode (issue #42): index one .dejafunc/index.json per package root.
+    explicit_roots = getattr(args, "roots", None)
+    all_roots = getattr(args, "all_roots", False)
+    if explicit_roots or all_roots:
+        from .monorepo import discover_roots, package_label
+
+        if explicit_roots:
+            targets = [Path(r) for r in explicit_roots]
+            bad = [t for t in targets if not t.is_dir()]
+            if bad:
+                print(f"deja: not a directory: {bad[0]}", file=sys.stderr)
+                return 2
+        else:
+            targets = discover_roots(root)
+
+        total = 0
+        for target in targets:
+            tconfig = _load_project_config(target, no_config=getattr(args, "no_config", False))
+            idx = build_index(target, exclude=tconfig.exclude, include=tconfig.include)
+            out = save_index(idx, target)
+            total += len(idx)
+            label = package_label(root, target)
+            print(f"\U0001f9e0 [{label}] indexed {len(idx)} functions \u2192 {out}")
+        print(f"\U0001f4e6 {len(targets)} package(s), {total} functions total")
+        return 0
+
     index = build_index(root, exclude=config.exclude, include=config.include)
     out = save_index(index, root)
     print(f"\U0001f9e0 Indexed {len(index)} functions \u2192 {out}")
     return 0
+
+
+def _find_merged(
+    args: argparse.Namespace,
+    root: Path,
+    query: str,
+    sig,
+    config,
+    *,
+    limit: int,
+) -> int:
+    """Handle ``deja find --all`` / ``--root`` (monorepo mode, issue #42).
+
+    Loads (or builds) every discovered package index under *root*, ranks across
+    all of them at once, and tags each hit with its package label. Honors the
+    same ``--json`` / ``--explain`` output modes as single-root find. Semantic
+    search and ``--age`` are not (yet) part of merged mode and are rejected here.
+    """
+    from .index import build_index, index_path, save_index
+    from .monorepo import discover_roots, merged_search, package_label
+    from .render import format_results
+    from .serialize import results_to_dict
+
+    if getattr(args, "semantic", False) or getattr(args, "age", False):
+        print("deja: --semantic and --age cannot be combined with --all or --root", file=sys.stderr)
+        return 2
+
+    explicit = getattr(args, "roots", None)
+    roots = discover_roots(root) if not explicit else [Path(r) for r in explicit]
+    if explicit:
+        bad = [r for r in roots if not r.is_dir()]
+        if bad:
+            print(f"deja: not a directory: {bad[0]}", file=sys.stderr)
+            return 2
+
+    for target in roots:
+        if not index_path(target).is_file():
+            tconfig = _load_project_config(target, no_config=getattr(args, "no_config", False))
+            index = build_index(target, exclude=tconfig.exclude, include=tconfig.include)
+            save_index(index, target)
+            label = package_label(root, target)
+            print(
+                f"\U0001f50e [{label}] no index yet \u2014 built one first\u2026", file=sys.stderr
+            )
+
+    merged = merged_search(
+        root,
+        query,
+        roots=roots,
+        limit=limit,
+        sig=sig,
+        intent=args.intent,
+        weights=config.weights,
+        exclude=config.exclude,
+        include=config.include,
+    )
+    for label in merged.built:
+        print(f"\U0001f50e [{label}] no index yet \u2014 built one first\u2026", file=sys.stderr)
+
+    scored = [m.scored for m in merged.results]
+    # Map ScoredRecord identity -> package label so render/serialize can tag hits.
+    packages = {id(m.scored): m.package for m in merged.results}
+
+    if getattr(args, "as_json", False):
+        import json as _json
+
+        doc = results_to_dict(scored, query=query, sig=sig, intent=args.intent, semantic=False)
+        doc["monorepo"] = True
+        doc["packages"] = sorted(merged.roots)
+        for entry, m in zip(doc.get("results", []), merged.results, strict=True):
+            entry["package"] = m.package
+        print(_json.dumps(doc, indent=2, ensure_ascii=False))
+        return 0 if scored else 1
+
+    header_query = query if query.strip() else (sig or "")
+    print(format_results(header_query, scored, explain=args.explain, packages=packages))
+    return 0 if scored else 1
 
 
 def cmd_find(args: argparse.Namespace) -> int:
@@ -599,6 +738,11 @@ def cmd_find(args: argparse.Namespace) -> int:
         return 2
 
     config = _load_project_config(root, no_config=getattr(args, "no_config", False))
+    limit = args.limit if args.limit is not None else DEFAULT_LIMIT
+
+    # Monorepo mode (issue #42): merged multi-root search across package indexes.
+    if getattr(args, "all_roots", False) or getattr(args, "roots", None):
+        return _find_merged(args, root, query, sig, config, limit=limit)
 
     try:
         index = load_index(root)
@@ -607,8 +751,6 @@ def cmd_find(args: argparse.Namespace) -> int:
         print("\U0001f50e No index yet \u2014 building one first\u2026", file=sys.stderr)
         index = build_index(root, exclude=config.exclude, include=config.include)
         save_index(index, root)
-
-    limit = args.limit if args.limit is not None else DEFAULT_LIMIT
 
     semantic = getattr(args, "semantic", False)
     semantic_used = False

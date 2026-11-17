@@ -483,6 +483,59 @@ file deleted since indexing) the age line is simply omitted — everything else
 still prints. Exit codes are scriptable: `0` for a single resolved function, `2`
 for an ambiguous name, and `1` for an unknown one (matching `deja find`'s miss).
 
+### Monorepo mode (`deja index --all` / `deja find --all`)
+
+Real work happens in **monorepos** with many packages — and redundancy is worst
+exactly there: the same `slugify` written independently in each package is the
+pain `deja-func` exists to kill, but it's invisible across package boundaries
+when every package has its own isolated index.
+
+Monorepo mode builds a per-package `.dejafunc/index.json` and lets `deja find`
+search **all of them at once**, tagging each hit with its package so a merged
+view stays legible.
+
+Index every package under a directory (auto-detecting roots — dirs with a
+`pyproject.toml` / `package.json` / `go.mod` / `Cargo.toml`):
+
+```bash
+deja index . --all
+# → 🧠 [pkg_a] indexed 42 functions → pkg_a/.dejafunc/index.json
+#   🧠 [pkg_b] indexed 31 functions → pkg_b/.dejafunc/index.json
+#   📦 2 package(s), 73 functions total
+```
+
+Or point at specific roots (repeatable `--root`):
+
+```bash
+deja index . --root packages/api --root packages/web
+```
+
+Then search across the whole monorepo with `--all` (or the same `--root` flags).
+Each result is prefixed with its package label, and cross-package near-dupes —
+the *same* function reinvented in two packages — both stay visible:
+
+```bash
+deja find slugify . --all
+# → 🫠 You already wrote 2 of these:
+#     [pkg_a] slugify — text.py:1 — (s)
+#         Turn a string into a URL-safe slug.
+#     [pkg_b] slugify — util.py:1 — (s)
+#         Make a slug from text.
+```
+
+Missing package indexes are built on the fly, so `deja find --all` works even
+before a `deja index --all`. The `--json` output gains a `"monorepo": true`
+flag, a top-level `"packages"` list, and a `"package"` label on each result.
+First-run builds honor each package's `.dejafunc.toml` (or `--no-config`).
+Overlapping roots show each source location only once, using the most specific
+package label; distinct files in different packages remain visible even when
+their relative paths match. Explicit roots outside the base use absolute-path
+labels to avoid collisions between equally named packages.
+Monorepo mode does not support `index --watch`, `find --semantic`, or
+`find --age`; combining these options reports an error instead of ignoring them.
+Single-root behavior is completely unchanged when neither `--all` nor `--root`
+is passed.
+
 ### Export / import the index (`deja export` / `deja import`)
 
 The index lives in `.dejafunc/index.json`, which is (rightly) gitignored and
